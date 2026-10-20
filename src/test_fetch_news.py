@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from fetch_news import article_text, is_macro, parse, parse_report, to_markdown, writer_prompt
+from fetch_news import article_text, gemini_text, is_macro, parse, parse_report, to_markdown, writer_prompt
 
 RSS = b"""<rss><channel>
 <item><title>Fed holds rates: &quot;wait and see&quot;</title><link>https://x.test/a</link>
@@ -43,6 +43,15 @@ class FetchNewsTest(unittest.TestCase):
         self.assertTrue(md.endswith("Reporting synthesized from [CNBC Economy](https://x.test/a) primary disclosures.\n"))
         with self.assertRaises(ValueError):
             parse_report("No headline here")
+
+    def test_gemini_text(self):
+        ok = {"candidates": [{"finishReason": "STOP", "content": {"parts": [
+            {"text": "plan", "thought": True}, {"text": "# Head"}, {"text": "line\n"}]}}]}
+        self.assertEqual(gemini_text(ok), "# Headline\n")
+        with self.assertRaises(ValueError):
+            gemini_text({"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": []}}]})
+        with self.assertRaises(ValueError):
+            gemini_text({"promptFeedback": {"blockReason": "SAFETY"}})
 
     def test_writer_prompt_uses_skill_rules(self):
         prompt = writer_prompt()

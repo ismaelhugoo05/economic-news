@@ -1,0 +1,49 @@
+name: Daily publish
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # 06:00 UTC every day
+  workflow_dispatch:  # manual "Run workflow" button for testing
+
+permissions:
+  contents: write  # commit new articles and seen_urls.txt back, so stories are never repeated
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Fetch stories and build site
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python run_daily.py
+
+      - name: Save new articles to the repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add content/articles data/seen_urls.txt
+          git diff --cached --quiet || { git commit -m "Daily articles $(date -u +%F)" && git push; }
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

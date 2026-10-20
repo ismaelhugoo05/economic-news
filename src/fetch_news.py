@@ -1,25 +1,27 @@
-"""Fetch fresh macroeconomic stories from financial RSS feeds and have Claude write an original
+"""Fetch fresh macroeconomic stories from financial RSS feeds and have Gemini write an original
 report for each into content/articles/ as Markdown, following the economic-writer skill."""
 import email.utils
 import hashlib
 import html
 import json
+import os
 import re
 import sys
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 
-import anthropic
-
 ROOT = Path(__file__).resolve().parent.parent
 ARTICLES = ROOT / "content" / "articles"
 SEEN = ROOT / "data" / "seen_urls.txt"
 WRITER_SKILL = ROOT / ".claude" / "skills" / "economic-writer" / "SKILL.md"
 LIMIT = 10
-MODEL = "claude-opus-5-5"
+# gemini-1.5-flash was shut down in Sept 2025; check ai.google.dev/gemini-api/docs/models when this one retires
+MODEL = "gemini-3.8-flash"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 OUTPUT_FORMAT = """
 
 ## Output format
@@ -120,22 +122,31 @@ def parse_report(text):
     return first[2:].strip(), lead, body
 
 
-def synthesize(client, s):
-    response = client.beta.messages.create(
-        model=MODEL,
-        max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",  # a declined request is retried on a fallback model inside the same call
-        output_config={"effort": "medium"},
-        system=writer_prompt(),
-        messages=[{
-            "role": "user",
-            "content": f"Source material. Use it for facts only, never for wording.\n\n<source>\n{source_material(s)}\n</source>",
-        }],
+def gemini_text(response):
+    candidates = response.get("candidates") or []
+    if not candidates:
+        raise ValueError(f"no candidates (prompt feedback: {response.get('promptFeedback')})")
+    if candidates[0].get("finishReason") != "STOP":
+        raise ValueError(f"model stopped with {candidates[0].get('finishReason')}")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+
+
+def synthesize(api_key, s):
+    body = {
+        "system_instruction": {"parts": [{"text": writer_prompt()}]},
+        "contents": [{"role": "user", "parts": [{
+            "text": f"Source material. Use it for facts only, never for wording.\n\n<source>\n{source_material(s)}\n</source>",
+        }]}],
+        "generationConfig": {"maxOutputTokens": 8192},
+    }
+    req = urllib.request.Request(
+        GEMINI_URL,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},  # header, so the key never lands in URLs or logs
     )
-    if response.stop_reason != "end_turn":
-        raise ValueError(f"model stopped with {response.stop_reason}")
-    return parse_report("".join(b.text for b in response.content if b.type == "text"))
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return parse_report(gemini_text(json.load(r)))
 
 
 def to_markdown(s, headline, lead, body):
@@ -158,6 +169,9 @@ def fetch(url):
 
 
 def main():
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise SystemExit("GEMINI_API_KEY is not set")
     ARTICLES.mkdir(parents=True, exist_ok=True)
     SEEN.parent.mkdir(parents=True, exist_ok=True)
     seen = set(SEEN.read_text(encoding="utf-8").split()) if SEEN.exists() else set()
@@ -173,17 +187,19 @@ def main():
             if s["url"] not in seen and is_macro(s):
                 fresh.setdefault(s["url"], s)
 
-    client = anthropic.Anthropic()
     written = 0
     with SEEN.open("a", encoding="utf-8") as seen_file:
         for s in sorted(fresh.values(), key=lambda s: s["date"], reverse=True):
             if written == LIMIT:
                 break
             try:
-                headline, lead, body = synthesize(client, s)
-            except (anthropic.AuthenticationError, TypeError) as e:  # the SDK raises TypeError when no credentials exist
-                raise SystemExit(f"Claude API authentication failed: {e}")
-            except (anthropic.APIError, ValueError) as e:
+                headline, lead, body = synthesize(api_key, s)
+            except urllib.error.HTTPError as e:
+                if e.code in (400, 401, 403, 404):  # bad key or retired model: every story would fail the same way
+                    raise SystemExit(f"Gemini API error {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
+                print(f"skipped {s['url']}: Gemini API error {e.code}", file=sys.stderr)
+                continue
+            except (OSError, ValueError) as e:
                 print(f"skipped {s['url']}: {e}", file=sys.stderr)  # not marked seen, so the next run retries it
                 continue
             slug = re.sub(r"[^a-z0-9]+", "-", headline.lower()).strip("-")[:60]
