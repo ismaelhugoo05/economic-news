@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -19,16 +20,24 @@ ARTICLES = ROOT / "content" / "articles"
 SEEN = ROOT / "data" / "seen_urls.txt"
 WRITER_SKILL = ROOT / ".claude" / "skills" / "economic-writer" / "SKILL.md"
 LIMIT = 10
-# gemini-1.5-flash was shut down in Sept 2025; check ai.google.dev/gemini-api/docs/models when this one retires
+# gemini-1.5-flash was shut down in Sept 2025 and 2.5-flash is legacy-only; check
+# ai.google.dev/gemini-api/docs/models when this one retires
 MODEL = "gemini-3.8-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+ATTEMPTS = 3
+SECTIONS = ("## Market Overview", "## Macroeconomic Implications", "## Key Data & Forecast")
+MIN_WORDS, MAX_WORDS = 380, 550  # prompt asks for 400-500; small slack so near misses don't burn retries
 OUTPUT_FORMAT = """
 
 ## Output format
-Reply with the finished report only, in Markdown, nothing before or after it:
+Reply with the complete finished report only, in Markdown, nothing before or after it. It MUST be
+400-500 words of body text: a full, in-depth article, never a summary or a teaser.
 - First line: `# <your headline>`
 - Then the lead paragraph (plain text, no heading).
-- Then `## Macro Context` and `## Key Takeaways` (bullet list of figures).
+- Then exactly these three sections, in this order, with these exact headings:
+  `## Market Overview` (paragraphs), `## Macroeconomic Implications` (paragraphs),
+  `## Key Data & Forecast` (a `- ` bullet list of the essential figures and the outlook).
+- No tables, no other headings.
 Do not add a source or attribution line; the pipeline appends the editorial note."""
 
 # AP has no public RSS feed, so it is not listed.
@@ -119,6 +128,12 @@ def parse_report(text):
     lead = next((p for p in body.split("\n\n") if not p.startswith(("#", "-", "*"))), "")
     if not lead:
         raise ValueError("report has no lead paragraph")
+    headings = [line.strip() for line in body.splitlines() if line.startswith("#")]
+    if headings != list(SECTIONS):
+        raise ValueError(f"headings {headings} do not match {list(SECTIONS)}")
+    words = len(re.sub(r"^\s*(#+|[-*])\s+", "", body, flags=re.M).split())
+    if not MIN_WORDS <= words <= MAX_WORDS:
+        raise ValueError(f"report is {words} words, needs 400-500")
     return first[2:].strip(), lead, body
 
 
@@ -147,6 +162,23 @@ def synthesize(api_key, s):
     )
     with urllib.request.urlopen(req, timeout=120) as r:
         return parse_report(gemini_text(json.load(r)))
+
+
+def write_report(api_key, s):
+    """Return (headline, lead, body) from Gemini, or None after ATTEMPTS failures; never falls back to the teaser."""
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return synthesize(api_key, s)
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 401, 403, 404):  # bad key or retired model: every story would fail the same way
+                raise SystemExit(f"Gemini API error {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
+            error = f"Gemini API error {e.code}"
+        except (OSError, ValueError) as e:  # timeouts, network errors, short or malformed reports
+            error = str(e)
+        print(f"  attempt {attempt}/{ATTEMPTS} failed for {s['url']}: {error}", file=sys.stderr)
+        if attempt < ATTEMPTS:
+            time.sleep(10 * attempt)
+    return None
 
 
 def to_markdown(s, headline, lead, body):
@@ -192,16 +224,11 @@ def main():
         for s in sorted(fresh.values(), key=lambda s: s["date"], reverse=True):
             if written == LIMIT:
                 break
-            try:
-                headline, lead, body = synthesize(api_key, s)
-            except urllib.error.HTTPError as e:
-                if e.code in (400, 401, 403, 404):  # bad key or retired model: every story would fail the same way
-                    raise SystemExit(f"Gemini API error {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
-                print(f"skipped {s['url']}: Gemini API error {e.code}", file=sys.stderr)
+            report = write_report(api_key, s)
+            if report is None:
+                print(f"skipped {s['url']}", file=sys.stderr)  # not marked seen, so the next run retries it
                 continue
-            except (OSError, ValueError) as e:
-                print(f"skipped {s['url']}: {e}", file=sys.stderr)  # not marked seen, so the next run retries it
-                continue
+            headline, lead, body = report
             slug = re.sub(r"[^a-z0-9]+", "-", headline.lower()).strip("-")[:60]
             path = ARTICLES / f"{s['date']:%Y-%m-%d}-{slug}-{hashlib.sha1(s['url'].encode()).hexdigest()[:6]}.md"
             path.write_text(to_markdown(s, headline, lead, body), encoding="utf-8")
@@ -209,7 +236,7 @@ def main():
             seen_file.flush()
             written += 1
             print(f"{path.relative_to(ROOT)} ({len(body.split())} words)")
-    print(f"{written} new stories")
+    print(f"{written} new stories" + ("" if written == LIMIT else f" (only {len(fresh)} fresh candidates or too many failures)"))
 
 
 if __name__ == "__main__":

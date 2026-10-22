@@ -74,7 +74,10 @@ main{padding-block:2rem 4rem}
 .story header{display:flex;flex-direction:column;gap:1rem;padding-bottom:2rem;margin-bottom:2rem;border-bottom:1px solid var(--line)}
 .story h1{font-size:clamp(2rem,5vw,2.75rem)}
 .prose{font-size:1.125rem;line-height:1.75}
-.prose h2,.prose h3{margin:2rem 0 .75rem}
+.prose h2,.prose h3{margin:2.25rem 0 .75rem;font-size:1.5rem}
+.prose p,.prose ul{margin:0 0 1.25rem}
+.prose ul{padding-left:1.25rem}
+.prose li{margin:.5rem 0}
 .button{align-self:flex-start;background:var(--accent);color:var(--on-accent);padding:.7rem 1.15rem;border-radius:6px;font-size:.875rem;font-weight:600;text-decoration:none;transition:background-color .2s ease}
 .button:hover,.button:focus-visible{background:var(--accent-hover);color:var(--on-accent)}
 @media (prefers-reduced-motion:reduce){*,::before{animation:none!important;transition:none!important}.card:hover{transform:none}}

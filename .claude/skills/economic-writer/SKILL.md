@@ -14,6 +14,7 @@ When writing an economic report from source coverage:
 7. **Structure**:
    - **Headline**: New, clear, active voice, non-clickbait. Never reuse the source headline.
    - **Lead Paragraph**: The core event and immediate market impact.
-   - **Macro Context**: Your own analysis of what this means for global trade, currencies, or interest rates.
-   - **Key Takeaways**: Bullet points of the essential figures.
+   - **## Market Overview**: The event and the market reaction in depth.
+   - **## Macroeconomic Implications**: Your own analysis of what this means for global trade, currencies, or interest rates.
+   - **## Key Data & Forecast**: Bullet points of the essential figures and the outlook.
 8. **Attribution**: Every report ends with "Reporting synthesized from [Source Name](source URL) primary disclosures." (`src/fetch_news.py` appends this line itself).

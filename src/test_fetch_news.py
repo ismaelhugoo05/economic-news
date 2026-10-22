@@ -10,15 +10,20 @@ RSS = b"""<rss><channel>
 <item><title>No link</title></item>
 </channel></rss>"""
 
-REPORT = """# Rate Pause Leaves Markets Pricing a December Cut
+FILLER = " ".join(["analysis"] * 130)
+REPORT = f"""# Rate Pause Leaves Markets Pricing a December Cut
 
 The Federal Reserve held its benchmark rate at 4.25%-4.50%.
 
-## Macro Context
-Analysis here.
+## Market Overview
+{FILLER}
 
-## Key Takeaways
+## Macroeconomic Implications
+{FILLER}
+
+## Key Data & Forecast
 - Rate: 4.25%-4.50%
+- {FILLER}
 """
 
 
@@ -43,6 +48,12 @@ class FetchNewsTest(unittest.TestCase):
         self.assertTrue(md.endswith("Reporting synthesized from [CNBC Economy](https://x.test/a) primary disclosures.\n"))
         with self.assertRaises(ValueError):
             parse_report("No headline here")
+
+    def test_rejects_short_or_misstructured_reports(self):
+        with self.assertRaisesRegex(ValueError, "words"):
+            parse_report(REPORT.replace(FILLER, "short"))
+        with self.assertRaisesRegex(ValueError, "headings"):
+            parse_report(REPORT.replace("## Macroeconomic Implications", "## Macro Context"))
 
     def test_gemini_text(self):
         ok = {"candidates": [{"finishReason": "STOP", "content": {"parts": [
