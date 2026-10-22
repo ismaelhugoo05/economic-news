@@ -25,8 +25,10 @@ LIMIT = 10
 MODEL = "gemini-3.8-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 ATTEMPTS = 3
+REQUEST_GAP = 7  # seconds before every Gemini request, to stay under the free tier's requests-per-minute limit
+BACKOFF = 15  # seconds after a failed attempt, doubled each time (15, 30, ...)
 SECTIONS = ("## Market Overview", "## Macroeconomic Implications", "## Key Data & Forecast")
-MIN_WORDS, MAX_WORDS = 380, 550  # prompt asks for 400-500; small slack so near misses don't burn retries
+MIN_WORDS, MAX_WORDS = 400, 550  # prompt asks for 400-500; slack only on the top end
 OUTPUT_FORMAT = """
 
 ## Output format
@@ -167,6 +169,7 @@ def synthesize(api_key, s):
 def write_report(api_key, s):
     """Return (headline, lead, body) from Gemini, or None after ATTEMPTS failures; never falls back to the teaser."""
     for attempt in range(1, ATTEMPTS + 1):
+        time.sleep(REQUEST_GAP)
         try:
             return synthesize(api_key, s)
         except urllib.error.HTTPError as e:
@@ -177,7 +180,7 @@ def write_report(api_key, s):
             error = str(e)
         print(f"  attempt {attempt}/{ATTEMPTS} failed for {s['url']}: {error}", file=sys.stderr)
         if attempt < ATTEMPTS:
-            time.sleep(10 * attempt)
+            time.sleep(BACKOFF * 2 ** (attempt - 1))
     return None
 
 

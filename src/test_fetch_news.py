@@ -10,7 +10,7 @@ RSS = b"""<rss><channel>
 <item><title>No link</title></item>
 </channel></rss>"""
 
-FILLER = " ".join(["analysis"] * 130)
+FILLER = " ".join(["analysis"] * 135)
 REPORT = f"""# Rate Pause Leaves Markets Pricing a December Cut
 
 The Federal Reserve held its benchmark rate at 4.25%-4.50%.
