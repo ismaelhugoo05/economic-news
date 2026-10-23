@@ -1,7 +1,11 @@
 import unittest
 
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+
 from build_site import (
-    dateline, markdown, markets_line, parse_article, quote, read_minutes, sentences, source_name, topic_of,
+    closes, filters_for, key_points, markdown, meta_line, parse_article, read_minutes, ribbon, rss_feed, search_index,
+    sentences, source_name, sparkline, stance, tag, topic_of,
 )
 
 ARTICLE = """---
@@ -39,23 +43,52 @@ class BuildSiteTest(unittest.TestCase):
         self.assertEqual(sentences(text, 2), "U.S. prices rose 0.3% in September. Yields fell to 4.1%.")
         self.assertEqual(sentences(text, 1), "U.S. prices rose 0.3% in September.")
 
-    def test_quote_and_markets_line(self):
+    def test_closes_sparkline_and_ribbon(self):
         chart = {"chart": {"result": [{"indicators": {"quote": [{"close": [1.10, None, 1.12, 1.10]}]}}]}}
-        price, change = quote(chart)
-        self.assertEqual((price, round(change, 2)), (1.10, -1.79))
-        inv_price, inv_change = quote(chart, invert=True)
-        self.assertAlmostEqual(inv_price, 1 / 1.10)
-        self.assertGreater(inv_change, 0)  # EUR falling means USD/EUR rising
-        line = markets_line([("Gold", "$4,007.90", -3.66), ("S&P 500", "7,623.68", 0.5)], "06:00 UTC")
-        self.assertIn('<li>Gold<b>$4,007.90</b><span class="down">▼ 3.66%</span></li>', line)
-        self.assertIn('<span class="up">▲ 0.50%</span>', line)
-        self.assertIn("Markets as of 06:00 UTC", line)
-        self.assertEqual(markets_line([], "x"), '<div class="rule-only"></div>')  # rules stay even without quotes
+        self.assertEqual(closes(chart), [1.10, 1.12, 1.10])
+        with self.assertRaises(ValueError):
+            closes({"chart": {"result": [{"indicators": {"quote": [{"close": [None, 1.1]}]}}]}})
+        svg = sparkline([1, 3, 2], width=80, height=24)
+        self.assertIn('class="spark up"', svg)  # last >= first
+        self.assertIn('d="M0.0,22.0 L40.0,2.0 L80.0,12.0"', svg)  # lowest value at the bottom, highest at the top
+        self.assertIn('class="spark down"', sparkline([3, 1]))
+        q = {"label": "Gold", "price": "$4,007.90", "day": -1.29, "month": 2.0, "series": [1, 2]}
+        out = ribbon([q], "Oct 24, 06:00 UTC")
+        self.assertIn('<span class="chg down">▼ 1.29%</span>', out)
+        self.assertIn("1-month trend · as of Oct 24, 06:00 UTC", out)
+        self.assertEqual(ribbon([], "x"), "")
 
-    def test_dateline(self):
+    def test_stance_is_a_breadth_count(self):
+        q = lambda m: {"month": m}  # noqa: E731
+        self.assertEqual(stance([q(1), q(2), q(3), q(4), q(-1)]), (4, 5, "Broadly higher"))
+        self.assertEqual(stance([q(1), q(-2), q(3), q(-4), q(-1)]), (2, 5, "Mixed"))
+        self.assertEqual(stance([q(-1), q(-2), q(3), q(-4), q(-1)]), (1, 5, "Broadly lower"))
+
+    def test_meta_and_tags(self):
         s = {"date": "2026-10-23T22:00:00+00:00", "minutes": 3}
-        self.assertEqual(dateline(s), '<p class="dateline"><b>Global Desk</b> — '
-                         '<time datetime="2026-10-23T22:00:00+00:00">October 23, 2026</time> · 3 min read</p>')
+        self.assertEqual(meta_line(s), '<p class="meta"><b>Global Desk</b> · '
+                         '<time datetime="2026-10-23T22:00:00+00:00">Oct 23, 2026</time> · 3 min read</p>')
+        self.assertEqual(tag("Central Banks"), '<span class="tag indigo">#POLICY</span>')
+        self.assertEqual(topic_of("Crude oil tops $100 as OPEC trims output", ""), "Energy")
+
+    def test_filters_and_key_points(self):
+        self.assertEqual(filters_for("Central Banks"), ["policy"])
+        self.assertEqual(filters_for("Energy"), ["commodities"])
+        self.assertEqual(filters_for("Inflation"), [])  # shown under "All" only
+        body = "Lead.\n\n## Key Data & Forecast\n- **CPI**: 3.5%\n- GDP 1%\n- Jobs 120k\n- Fourth"
+        self.assertEqual(key_points(body), ["<strong>CPI</strong>: 3.5%", "GDP 1%", "Jobs 120k"])
+        self.assertEqual(key_points("No bullets here."), [])
+
+    def test_search_index_and_feed(self):
+        s = {"slug": "2026-10-23-fed-holds-abc123", "title": 'Fed holds & "waits"', "topic": "Central Banks",
+             "summary": "Rates held at 4%. Markets calm.", "date": "2026-10-23T22:00:00+00:00"}
+        self.assertEqual(search_index([s]), [{"t": 'Fed holds & "waits"', "g": "#POLICY", "s": "Rates held at 4%.",
+                                              "d": "Oct 23, 2026", "u": "articles/2026-10-23-fed-holds-abc123.html"}])
+        feed = ET.fromstring(rss_feed([s], datetime(2026, 10, 24, 6, tzinfo=timezone.utc)))  # must be well-formed XML
+        item = feed.find("channel/item")
+        self.assertEqual(item.findtext("title"), 'Fed holds & "waits"')
+        self.assertTrue(item.findtext("link").endswith("/articles/2026-10-23-fed-holds-abc123.html"))
+        self.assertEqual(item.findtext("pubDate"), "Fri, 23 Oct 2026 22:00:00 +0000")
 
 
 if __name__ == "__main__":
