@@ -147,6 +147,22 @@ class FetchNewsTest(unittest.TestCase):
         self.assertEqual(agents, [fetch_news.BROWSER_UA])
         self.assertNotIn("MarketWatch", fetch_news.FEEDS)
 
+    def test_429_stops_the_run_and_other_errors_skip_one_story(self):
+        import fetch_news
+        body = json.dumps({"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded."}}).encode()
+        original = fetch_news.synthesize
+        try:
+            fetch_news.synthesize = lambda *a: (_ for _ in ()).throw(
+                urllib.error.HTTPError("https://x.test", 429, "Too Many Requests", {}, io.BytesIO(body)))
+            with self.assertRaisesRegex(fetch_news.QuotaExhausted, "RESOURCE_EXHAUSTED"):
+                fetch_news.write_report("k", {"url": "u"}, "m", 5)
+            fetch_news.synthesize = lambda *a: (_ for _ in ()).throw(
+                urllib.error.HTTPError("https://x.test", 503, "Unavailable", {}, io.BytesIO(b"busy")))
+            self.assertIsNone(fetch_news.write_report("k", {"url": "u"}, "m", 5))
+        finally:
+            fetch_news.synthesize = original
+        self.assertEqual(fetch_news.MAX_NEW_STORIES, 5)
+
     def test_writer_prompt_uses_skill_rules(self):
         prompt = writer_prompt()
         self.assertIn("100% original", prompt)

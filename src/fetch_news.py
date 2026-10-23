@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ARTICLES = ROOT / "content" / "articles"
 SEEN = ROOT / "data" / "seen_urls.txt"
 WRITER_SKILL = ROOT / ".claude" / "skills" / "economic-writer" / "SKILL.md"
-LIMIT = 10
+MAX_NEW_STORIES = 5  # per run; keeps a run well inside the Gemini free tier's daily request quota
 # gemini-1.5-flash was shut down in Sept 2025 and 2.5-flash is legacy-only; check
 # ai.google.dev/gemini-api/docs/models when this one retires
 MODEL = "gemini-3.8-flash"
@@ -221,6 +221,10 @@ def gemini_error(e):
             + (f" | retry after {retry}" if retry else ""))
 
 
+class QuotaExhausted(Exception):
+    """Gemini answered 429: every further call this run would fail the same way."""
+
+
 def write_report(api_key, s, material, timeout):
     """Return (headline, lead, body) from one Gemini attempt, or None; never falls back to the teaser."""
     try:
@@ -228,6 +232,8 @@ def write_report(api_key, s, material, timeout):
     except urllib.error.HTTPError as e:
         if e.code in (400, 401, 403, 404):  # bad key or retired model: every story would fail the same way
             raise SystemExit(gemini_error(e))
+        if e.code == 429:
+            raise QuotaExhausted(gemini_error(e))
         error = gemini_error(e)
     except (OSError, ValueError) as e:  # timeouts, network errors, short or malformed reports
         error = str(e)
@@ -277,7 +283,7 @@ def main():
     written = calls = 0
     with SEEN.open("a", encoding="utf-8") as seen_file:
         for s in sorted(fresh.values(), key=lambda s: s["date"], reverse=True):
-            if written == LIMIT:
+            if written == MAX_NEW_STORIES:
                 break
             if deadline - time.monotonic() < MIN_TIME_FOR_REPORT:
                 print(f"run time limit of {RUN_LIMIT}s reached; publishing what is written", file=sys.stderr)
@@ -292,7 +298,11 @@ def main():
                 print(f"run time limit of {RUN_LIMIT}s reached; publishing what is written", file=sys.stderr)
                 break
             calls += 1
-            report = write_report(api_key, s, material, min(GEMINI_TIMEOUT, remaining))
+            try:
+                report = write_report(api_key, s, material, min(GEMINI_TIMEOUT, remaining))
+            except QuotaExhausted as e:
+                print(f"stopping early, Gemini quota hit; publishing what is written: {e}", file=sys.stderr)
+                break
             if report is None:
                 continue
             headline, lead, body = report
