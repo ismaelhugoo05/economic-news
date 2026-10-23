@@ -103,6 +103,33 @@ class FetchNewsTest(unittest.TestCase):
                 parse_report(REPORT.replace("analysis", bad, 1))
         parse_report(REPORT.replace("analysis", "rates < 5% and > 3%", 1))  # plain comparisons are fine
 
+    def test_gemini_request_uses_low_thinking_and_header_key(self):
+        import fetch_news
+        sent = {}
+
+        class Reply(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def fake_urlopen(req, timeout):
+            sent.update(body=json.loads(req.data), key=req.get_header("X-goog-api-key"), url=req.full_url, timeout=timeout)
+            reply = {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": REPORT}]}}]}
+            return Reply(json.dumps(reply).encode())
+
+        story = {"url": "https://x.test/a", "title": "T", "summary": "S"}
+        original, orig_material = fetch_news.urllib.request.urlopen, fetch_news.source_material
+        fetch_news.urllib.request.urlopen = fake_urlopen
+        try:
+            fetch_news.source_material = lambda s: "material"
+            headline, _, _ = fetch_news.synthesize("k3y", story, 42)
+        finally:
+            fetch_news.urllib.request.urlopen = original
+            fetch_news.source_material = orig_material
+        self.assertEqual(headline, "Rate Pause Leaves Markets Pricing a December Cut")
+        self.assertEqual(sent["body"]["generationConfig"]["thinkingConfig"], {"thinkingLevel": "low"})
+        self.assertEqual((sent["key"], sent["timeout"]), ("k3y", 42))
+        self.assertNotIn("k3y", sent["url"])  # the key travels in a header, never in the URL
+
     def test_writer_prompt_uses_skill_rules(self):
         prompt = writer_prompt()
         self.assertIn("100% original", prompt)

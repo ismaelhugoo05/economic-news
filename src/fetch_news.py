@@ -26,7 +26,7 @@ MODEL = "gemini-3.8-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 REQUEST_GAP = 7  # seconds between Gemini requests, to stay under the free tier's requests-per-minute limit
 FETCH_TIMEOUT = 5  # seconds for feeds and source pages, so dead hosts fail fast
-GEMINI_TIMEOUT = 60  # seconds for one report; also capped by the time left in the run
+GEMINI_TIMEOUT = 90  # seconds for one report; also capped by the time left in the run
 RUN_LIMIT = 300  # seconds; after this no new report is started and the run publishes what it has
 MIN_TIME_FOR_REPORT = 20  # seconds; don't start a Gemini call that can't plausibly finish before RUN_LIMIT
 SECTIONS = ("## Market Overview", "## Macroeconomic Implications", "## Key Data & Forecast")
@@ -184,7 +184,8 @@ def synthesize(api_key, s, timeout):
         "contents": [{"role": "user", "parts": [{
             "text": f"Write the report from this source material. Use it for facts only, never for wording.\n\n{fenced(source_material(s))}",
         }]}],
-        "generationConfig": {"maxOutputTokens": 8192},
+        # "low" thinking: the default ("medium") made reports take over 60s each, so runs timed out
+        "generationConfig": {"maxOutputTokens": 8192, "thinkingConfig": {"thinkingLevel": "low"}},
     }
     req = urllib.request.Request(
         GEMINI_URL,
