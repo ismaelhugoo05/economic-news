@@ -1,6 +1,9 @@
 import unittest
+from datetime import date, datetime, timezone
 
-from build_site import markdown, parse_article, read_minutes, source_name, topic_of
+from build_site import (
+    coverage_series, key_point, markdown, parse_article, quote, read_minutes, source_name, ticker, topic_of,
+)
 
 ARTICLE = """---
 title: "Fed: \\"hold\\""
@@ -32,6 +35,29 @@ class BuildSiteTest(unittest.TestCase):
         self.assertEqual(source_name("https://www.cnbc.com/x.html"), "CNBC")
         self.assertEqual(source_name("https://example.org/x"), "example.org")
         self.assertEqual((read_minutes("word " * 10), read_minutes("word " * 231)), (1, 2))
+        self.assertEqual(source_name("https://www.federalreserve.gov/x.htm"), "Federal Reserve")
+        self.assertEqual(key_point("Lead.\n\n## Key Data & Forecast\n* **CPI**: 3.5%\n* GDP"), "<strong>CPI</strong>: 3.5%")
+
+    def test_quote_and_ticker(self):
+        chart = {"chart": {"result": [{"indicators": {"quote": [{"close": [1.10, None, 1.12, 1.10]}]}}]}}
+        price, change = quote(chart)
+        self.assertEqual((price, round(change, 2)), (1.10, -1.79))
+        inv_price, inv_change = quote(chart, invert=True)
+        self.assertAlmostEqual(inv_price, 1 / 1.10)
+        self.assertGreater(inv_change, 0)  # EUR falling means USD/EUR rising
+        html_out = ticker([("GOLD", "$4,007.90", -3.66), ("S&P 500", "7,623.68", 0.5)], "2026-10-24 06:00 UTC")
+        self.assertIn('<span class="down"><i aria-hidden="true">▼</i> -3.66%</span>', html_out)
+        self.assertIn('<span class="up"><i aria-hidden="true">▲</i> +0.50%</span>', html_out)
+        self.assertEqual(html_out.count("GOLD"), 2)  # second copy keeps the marquee seamless
+        self.assertEqual(ticker([], "x"), "")
+
+    def test_coverage_series(self):
+        at = lambda d: datetime(2026, 10, d, 12, tzinfo=timezone.utc)  # noqa: E731
+        stories = [{"topic": "Inflation", "dt": at(23)}, {"topic": "Inflation", "dt": at(24)},
+                   {"topic": "Trade", "dt": at(24)}, {"topic": "Fiscal", "dt": at(1)}, {"topic": "Trade", "dt": None}]
+        series = coverage_series(stories, date(2026, 10, 24), days=3)
+        self.assertEqual(series["days"], ["10-22", "10-23", "10-24"])
+        self.assertEqual(series["series"], [{"name": "Inflation", "values": [0, 1, 1]}, {"name": "Trade", "values": [0, 0, 1]}])
 
 
 if __name__ == "__main__":
