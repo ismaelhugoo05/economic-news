@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -28,7 +28,7 @@ ATTEMPTS = 3
 REQUEST_GAP = 7  # seconds before every Gemini request, to stay under the free tier's requests-per-minute limit
 BACKOFF = 15  # seconds after a failed attempt, doubled each time (15, 30, ...)
 SECTIONS = ("## Market Overview", "## Macroeconomic Implications", "## Key Data & Forecast")
-MIN_WORDS, MAX_WORDS = 400, 550  # prompt asks for 400-500; slack only on the top end
+MIN_WORDS, MAX_WORDS = 350, 550  # prompt asks for 400-500; slack so near misses are kept, not retried
 OUTPUT_FORMAT = """
 
 ## Output format
@@ -42,11 +42,14 @@ Reply with the complete finished report only, in Markdown, nothing before or aft
 - No tables, no other headings.
 Do not add a source or attribution line; the pipeline appends the editorial note."""
 
-# AP has no public RSS feed, so it is not listed.
+# AP has no public RSS feed, and the IMF's RSS returns 403 to scripts, so neither is listed.
 FEEDS = {
     "CNBC Finance": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
     "CNBC Economy": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
     "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "Federal Reserve": "https://www.federalreserve.gov/feeds/press_monetary.xml",
+    "Yahoo Finance": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US",
+    "World Bank": "https://search.worldbank.org/api/v2/news?format=xml&rows=30&lang_exact=English&fl=title,url,lnchdt,descr",
 }
 
 # shortcut: keyword match on title+summary, upgrade to a classifier if too many false hits
@@ -62,20 +65,28 @@ def clean(text):
     return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", text)).split())
 
 
-def parse(xml_bytes, source):
-    # shortcut: RSS 2.0 <item> only, add Atom <entry> if a feed needs it
-    for item in ET.fromstring(xml_bytes).iter("item"):
-        title = clean(item.findtext("title") or "")
-        url = (item.findtext("link") or "").strip()
-        if not title or not url:
-            continue
+def parse_date(text):
+    for parser in (email.utils.parsedate_to_datetime, lambda t: datetime.fromisoformat(t.replace("Z", "+00:00"))):
         try:
-            date = email.utils.parsedate_to_datetime(item.findtext("pubDate"))
-        except (TypeError, ValueError):
-            date = datetime.now(timezone.utc)
-        if date.tzinfo is None:
-            date = date.replace(tzinfo=timezone.utc)
-        yield {"title": title, "url": url, "date": date, "summary": clean(item.findtext("description") or ""), "source": source}
+            date = parser(text)
+            return date if date.tzinfo else date.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return None
+
+
+def parse(xml_bytes, source):
+    # shortcut: RSS 2.0 <item>s plus the World Bank API's <news> records; add Atom <entry> if a feed needs it
+    now = datetime.now(timezone.utc)
+    root = ET.fromstring(xml_bytes)
+    for item in [*root.iter("item"), *root.iter("news")]:
+        title = clean(item.findtext("title") or "")
+        url = (item.findtext("link") or item.findtext("url") or "").strip()
+        date = parse_date(item.findtext("pubDate") or item.findtext("lnchdt")) or now
+        if not title or not url or date > now + timedelta(days=1):  # the World Bank lists some pages under future launch dates
+            continue
+        summary = clean(item.findtext("description") or item.findtext("descr") or "")
+        yield {"title": title, "url": url, "date": date, "summary": summary, "source": source}
 
 
 def is_macro(story):

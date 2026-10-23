@@ -10,7 +10,7 @@ RSS = b"""<rss><channel>
 <item><title>No link</title></item>
 </channel></rss>"""
 
-FILLER = " ".join(["analysis"] * 135)
+FILLER = " ".join(["analysis"] * 120)
 REPORT = f"""# Rate Pause Leaves Markets Pricing a December Cut
 
 The Federal Reserve held its benchmark rate at 4.25%-4.50%.
@@ -33,6 +33,15 @@ class FetchNewsTest(unittest.TestCase):
         self.assertEqual([s["url"] for s in stories], ["https://x.test/a", "https://x.test/b"])
         self.assertEqual(stories[0]["summary"], "CPI rose 0.3%.")
         self.assertEqual([is_macro(s) for s in stories], [True, False])
+
+    def test_parse_world_bank_records(self):
+        xml = b"""<WbgNews>
+<news><url>http://www.worldbank.org/a</url><title>Growth slows</title><descr>GDP to slow.</descr><lnchdt>2026-09-28T09:00:00Z</lnchdt></news>
+<news><url>http://www.worldbank.org/b</url><title>Future page</title><lnchdt>2099-01-01T00:00:00Z</lnchdt></news>
+</WbgNews>"""
+        stories = list(parse(xml, "World Bank"))
+        self.assertEqual([(s["url"], s["summary"]) for s in stories], [("http://www.worldbank.org/a", "GDP to slow.")])
+        self.assertEqual(stories[0]["date"], datetime(2026, 9, 28, 9, tzinfo=timezone.utc))
 
     def test_article_text_keeps_body_paragraphs(self):
         page = "<nav><p>Menu</p></nav><p>The Bureau of Labor Statistics said prices rose <b>0.3%</b> in September.</p>"
