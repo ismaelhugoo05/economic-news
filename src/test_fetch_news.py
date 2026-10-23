@@ -1,7 +1,10 @@
+import io
+import json
 import unittest
+import urllib.error
 from datetime import datetime, timezone
 
-from fetch_news import article_text, gemini_text, is_macro, parse, parse_report, to_markdown, writer_prompt
+from fetch_news import article_text, gemini_error, gemini_text, is_macro, parse, parse_report, to_markdown, writer_prompt
 
 RSS = b"""<rss><channel>
 <item><title>Fed holds rates: &quot;wait and see&quot;</title><link>https://x.test/a</link>
@@ -72,6 +75,17 @@ class FetchNewsTest(unittest.TestCase):
             gemini_text({"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": []}}]})
         with self.assertRaises(ValueError):
             gemini_text({"promptFeedback": {"blockReason": "SAFETY"}})
+
+    def test_gemini_error_shows_quota_kind(self):
+        body = json.dumps({"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "You exceeded your current quota.", "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+                {"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "21s"}]}}).encode()
+        e = urllib.error.HTTPError("https://x.test", 429, "Too Many Requests", {}, io.BytesIO(body))
+        self.assertEqual(gemini_error(e), "Gemini API error 429 RESOURCE_EXHAUSTED: You exceeded your current quota."
+                         " | quota: GenerateRequestsPerMinutePerProjectPerModel-FreeTier | retry after 21s")
+        plain = urllib.error.HTTPError("https://x.test", 503, "Unavailable", {}, io.BytesIO(b"upstream down"))
+        self.assertEqual(gemini_error(plain), "Gemini API error 503: upstream down")
 
     def test_writer_prompt_uses_skill_rules(self):
         prompt = writer_prompt()

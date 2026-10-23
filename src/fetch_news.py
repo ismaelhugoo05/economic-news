@@ -179,14 +179,30 @@ def synthesize(api_key, s, timeout):
         return parse_report(gemini_text(json.load(r)))
 
 
+def gemini_error(e):
+    """Google's error as one line. For 429s the quota id tells per-minute pacing
+    (...PerMinute...) apart from the daily cap (...PerDay...); both report RESOURCE_EXHAUSTED."""
+    body = e.read().decode("utf-8", "replace")
+    try:
+        err = json.loads(body)["error"]
+    except (ValueError, KeyError, TypeError):
+        return f"Gemini API error {e.code}: {body[:500]}"
+    details = err.get("details") or []
+    quotas = [v["quotaId"] for d in details for v in d.get("violations", []) if v.get("quotaId")]
+    retry = next((d["retryDelay"] for d in details if d.get("retryDelay")), None)
+    return (f"Gemini API error {e.code} {err.get('status')}: {err.get('message', '')[:300]}"
+            + (f" | quota: {', '.join(quotas)}" if quotas else "")
+            + (f" | retry after {retry}" if retry else ""))
+
+
 def write_report(api_key, s, timeout):
     """Return (headline, lead, body) from one Gemini attempt, or None; never falls back to the teaser."""
     try:
         return synthesize(api_key, s, timeout)
     except urllib.error.HTTPError as e:
         if e.code in (400, 401, 403, 404):  # bad key or retired model: every story would fail the same way
-            raise SystemExit(f"Gemini API error {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
-        error = f"Gemini API error {e.code}"
+            raise SystemExit(gemini_error(e))
+        error = gemini_error(e)
     except (OSError, ValueError) as e:  # timeouts, network errors, short or malformed reports
         error = str(e)
     print(f"skipped {s['url']}: {error}", file=sys.stderr)  # not marked seen, so a later run tries it again
