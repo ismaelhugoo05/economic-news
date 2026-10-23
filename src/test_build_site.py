@@ -4,8 +4,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from build_site import (
-    closes, filters_for, key_points, markdown, meta_line, parse_article, read_minutes, ribbon, rss_feed, search_index,
-    sentences, source_name, sparkline, stance, tag, topic_of,
+    CSP, CSS, article_page, closes, filters_for, key_points, lead_card, markdown, meta_line, page, parse_article, read_minutes,
+    ribbon, rss_feed, search_index, sentences, source_name, sparkline, stance, stance_dial, story_card, tag, topic_of,
 )
 
 ARTICLE = """---
@@ -28,8 +28,31 @@ class BuildSiteTest(unittest.TestCase):
         out = markdown(body)
         self.assertIn("<h2>Key Takeaway</h2>", out)
         self.assertIn("<ul><li>CPI <strong>0.3%</strong>, <em>core</em> 0.2%</li><li>&lt;script&gt;x&lt;/script&gt;</li></ul>", out)
-        self.assertIn('<a href="https://cnbc.test/a?b=1&amp;c=2">CNBC</a>', out)
+        self.assertIn('<a href="https://cnbc.test/a?b=1&amp;c=2" target="_blank" rel="noopener noreferrer">CNBC</a>', out)
         self.assertNotIn('href="javascript', out)
+
+    def test_hostile_story_fields_are_escaped(self):
+        s = {"slug": "2026-10-23-x-abc123", "title": '<img src=x onerror=alert(1)>', "summary": '"><script>alert(1)</script>',
+             "date": "2026-10-23T22:00:00+00:00", "url": 'https://evil.test/"><script>x</script>', "source": "<b>src</b>",
+             "topic": "Markets", "minutes": 1, "body": "", "points": []}
+        out = page(s["title"], article_page(s) + story_card(s) + lead_card(s), "../", datetime(2026, 10, 24, tzinfo=timezone.utc), [])
+        for raw in ("<img src=x", "<script>alert", "<script>x", "<b>src</b>"):
+            self.assertNotIn(raw, out)
+        self.assertIn('href="https://evil.test/&quot;&gt;&lt;script&gt;x&lt;/script&gt;" target="_blank" rel="noopener noreferrer"', out)
+        self.assertNotIn("javascript:", article_page({**s, "url": "javascript:alert(1)"}))  # non-http(s) URLs get no button
+
+    def test_security_headers_and_no_inline_styles_or_scripts(self):
+        out = page("t", "<main></main>", "", datetime(2026, 10, 24, tzinfo=timezone.utc), [])
+        self.assertIn(f'<meta http-equiv="Content-Security-Policy" content="{CSP}">', out)
+        self.assertIn("script-src 'self';", CSP)
+        self.assertNotIn("unsafe-inline", CSP)
+        self.assertIn('<meta http-equiv="X-Content-Type-Options" content="nosniff">', out)
+        self.assertIn('<meta name="referrer" content="strict-origin-when-cross-origin">', out)
+        q = {"label": "Gold", "price": "$1", "day": 1.0, "month": 1.0, "series": [1, 2]}
+        dial = stance_dial([q, {**q, "month": -1.0}])
+        self.assertIn('class="needle n1of2"', dial)
+        self.assertIn(".dial .needle.n1of2{--a:0deg}", CSS)
+        self.assertNotRegex(out + dial, r'\sstyle="|<script>')  # CSP blocks inline style attributes and inline scripts
 
     def test_card_details(self):
         self.assertEqual(topic_of("Hot PPI shows the Fed's work is not done", ""), "Inflation")

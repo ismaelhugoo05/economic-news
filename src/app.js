@@ -58,7 +58,7 @@
     if (!index) return;
     const terms = searchInput.value.toLowerCase().split(/\s+/).filter(Boolean);
     if (!terms.length) return hint(`Type to search ${index.length} reports by headline, tag or summary.`);
-    const matches = index.filter((r) => {
+    const matches = index.filter((r) => /^articles\/[a-z0-9-]+\.html$/.test(r.u)).filter((r) => { // only ever link to our own report pages
       const hay = `${r.t} ${r.g} ${r.s}`.toLowerCase();
       return terms.every((t) => hay.includes(t));
     }).slice(0, 25);

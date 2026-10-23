@@ -250,7 +250,14 @@ mark{background:color-mix(in srgb,var(--amber) 35%,transparent);color:inherit;bo
 @media (prefers-reduced-motion:reduce){*,::backdrop{animation:none!important;transition:none!important}.card:hover{transform:none}}
 """
 
-SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
+# needle angle per "k of n benchmarks up" as classes, because the CSP forbids inline style attributes
+CSS += "".join(f".dial .needle.n{k}of{n}{{--a:{-90 + 180 * k / n:.0f}deg}}\n" for n in range(1, len(MARKETS) + 1) for k in range(n + 1))
+
+# Static hosting can't send HTTP headers, so these go in <meta>. frame-ancestors is ignored in <meta> and is left out.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+       "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'")
+
+SEARCH_ICON ='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
 
 
 def parse_article(text):
@@ -267,7 +274,7 @@ def parse_article(text):
 
 def inline(text):
     text = html.escape(text)
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text)
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", r'<a href="\2" target="_blank" rel="noopener noreferrer">\1</a>', text)
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     return re.sub(r"\*(\S.*?)\*", r"<em>\1</em>", text)
 
@@ -423,7 +430,6 @@ def stance_dial(quotes):
     if not quotes:
         return ""
     rising, total, label = stance(quotes)
-    angle = -90 + 180 * rising / total
     movers = "".join(
         f'<li><span>{q["label"]}</span><span class="{"up" if q["month"] >= 0 else "down"}">'
         f'{"▲" if q["month"] >= 0 else "▼"} {abs(q["month"]):.1f}%</span></li>'
@@ -435,7 +441,7 @@ def stance_dial(quotes):
 <svg class="dial" viewBox="0 0 200 118" role="img" aria-label="{rising} of {total} benchmarks higher over the past month: {label}">
 <defs><linearGradient id="dial-grad" x1="0" x2="1"><stop offset="0" class="dial-grad-down"/><stop offset=".5" class="dial-grad-mid"/><stop offset="1" class="dial-grad-up"/></linearGradient></defs>
 <path class="track" d="M20 100 A80 80 0 0 1 180 100"/>
-<line class="needle" x1="100" y1="100" x2="100" y2="34" style="--a:{angle:.0f}deg"/>
+<line class="needle n{rising}of{total}" x1="100" y1="100" x2="100" y2="34"/>
 <circle class="hub" cx="100" cy="100" r="7"/>
 <text class="scale" x="14" y="117">Lower</text><text class="scale" x="186" y="117" text-anchor="end">Higher</text>
 </svg>
@@ -544,6 +550,9 @@ def page(title, content, root, built, quotes, article=False):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
+<meta http-equiv="Content-Security-Policy" content="{CSP}">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>{html.escape(title)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -590,7 +599,7 @@ def exec_summary(points):
 def article_page(s):
     url = s["url"]
     source = (
-        f'<a class="button" href="{html.escape(url)}" target="_blank" rel="noopener">Primary source: {html.escape(s["source"])} &#8599;</a>'
+        f'<a class="button" href="{html.escape(url)}" target="_blank" rel="noopener noreferrer">Primary source: {html.escape(s["source"])} &#8599;</a>'
         if url.startswith(("https://", "http://")) else ""
     )
     return (
