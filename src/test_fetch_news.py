@@ -116,19 +116,36 @@ class FetchNewsTest(unittest.TestCase):
             reply = {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": REPORT}]}}]}
             return Reply(json.dumps(reply).encode())
 
-        story = {"url": "https://x.test/a", "title": "T", "summary": "S"}
-        original, orig_material = fetch_news.urllib.request.urlopen, fetch_news.source_material
+        original = fetch_news.urllib.request.urlopen
         fetch_news.urllib.request.urlopen = fake_urlopen
         try:
-            fetch_news.source_material = lambda s: "material"
-            headline, _, _ = fetch_news.synthesize("k3y", story, 42)
+            headline, _, _ = fetch_news.synthesize("k3y", "material", 42)
         finally:
             fetch_news.urllib.request.urlopen = original
-            fetch_news.source_material = orig_material
         self.assertEqual(headline, "Rate Pause Leaves Markets Pricing a December Cut")
         self.assertEqual(sent["body"]["generationConfig"]["thinkingConfig"], {"thinkingLevel": "low"})
         self.assertEqual((sent["key"], sent["timeout"]), ("k3y", 42))
         self.assertNotIn("k3y", sent["url"])  # the key travels in a header, never in the URL
+
+    def test_thin_or_blocked_pages_are_skipped_before_gemini(self):
+        import fetch_news
+        story = {"url": "https://x.test/a", "title": "Fed holds", "summary": "Teaser."}
+        long_para = "<p>" + " ".join(["The central bank kept its policy rate unchanged"] * 15) + ".</p>"
+        pages = {"thin": b"<p>Subscribe to continue reading this article today.</p>", "full": long_para.encode()}
+        original = fetch_news.fetch
+        try:
+            fetch_news.fetch = lambda url, ua=None: pages["thin"]
+            self.assertIsNone(fetch_news.source_material(story))
+            fetch_news.fetch = lambda url, ua=None: (_ for _ in ()).throw(TimeoutError("timed out"))
+            self.assertIsNone(fetch_news.source_material(story))
+            agents = []
+            fetch_news.fetch = lambda url, ua=None: agents.append(ua) or pages["full"]
+            material = fetch_news.source_material(story)
+        finally:
+            fetch_news.fetch = original
+        self.assertTrue(material.startswith("Headline: Fed holds\nTeaser: Teaser.\n\nThe central bank"))
+        self.assertEqual(agents, [fetch_news.BROWSER_UA])
+        self.assertNotIn("MarketWatch", fetch_news.FEEDS)
 
     def test_writer_prompt_uses_skill_rules(self):
         prompt = writer_prompt()

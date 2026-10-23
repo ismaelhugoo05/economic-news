@@ -26,8 +26,12 @@ MODEL = "gemini-3.8-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 REQUEST_GAP = 7  # seconds between Gemini requests, to stay under the free tier's requests-per-minute limit
 FETCH_TIMEOUT = 5  # seconds for feeds and source pages, so dead hosts fail fast
+MIN_SOURCE_WORDS = 100  # less page text than this means a block, paywall or empty page: skip without calling Gemini
+FEED_UA = "Mozilla/5.0 (econ-news-pipeline)"
+# article pages get an ordinary browser User-Agent; some publishers serve empty pages to unknown clients
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 GEMINI_TIMEOUT = 90  # seconds for one report; also capped by the time left in the run
-RUN_LIMIT = 300  # seconds; after this no new report is started and the run publishes what it has
+RUN_LIMIT = 600  # seconds; after this no new report is started and the run publishes what it has
 MIN_TIME_FOR_REPORT = 20  # seconds; don't start a Gemini call that can't plausibly finish before RUN_LIMIT
 SECTIONS = ("## Market Overview", "## Macroeconomic Implications", "## Key Data & Forecast")
 MIN_WORDS, MAX_WORDS = 350, 550  # prompt asks for 400-500; slack so near misses are kept, not retried
@@ -53,11 +57,11 @@ INPUT_START, INPUT_END = "<<<ARTICLE_INPUT>>>", "<<<END_ARTICLE_INPUT>>>"
 # raw HTML or script-capable URIs in a report mean the model was steered or misbehaved; reject, don't clean
 UNSAFE_OUTPUT = re.compile(r"<\s*/?\s*[a-z!][^>]*>|\b(?:javascript|vbscript)\s*:|\bdata\s*:\s*text/html", re.I)
 
-# AP has no public RSS feed, and the IMF's RSS returns 403 to scripts, so neither is listed.
+# AP has no public RSS feed, the IMF's RSS returns 403 to scripts, and MarketWatch article pages come back
+# empty to scripts (run 40075484565), so none of them is listed.
 FEEDS = {
     "CNBC Finance": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
     "CNBC Economy": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
-    "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
     "Federal Reserve": "https://www.federalreserve.gov/feeds/press_monetary.xml",
     "Yahoo Finance": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US",
     "World Bank": "https://search.worldbank.org/api/v2/news?format=xml&rows=30&lang_exact=English&fl=title,url,lnchdt,descr",
@@ -131,11 +135,16 @@ def article_text(page_html):
 
 
 def source_material(s):
+    """The article's text for Gemini, or None when the page is blocked, unreachable or too thin to report from."""
     try:
-        text = article_text(fetch(s["url"]).decode("utf-8", "replace"))
+        text = article_text(fetch(s["url"], BROWSER_UA).decode("utf-8", "replace"))
     except OSError as e:
-        print(f"  no page text for {s['url']}: {e}", file=sys.stderr)
-        text = ""
+        print(f"skipped {s['url']}: page fetch failed ({e})", file=sys.stderr)
+        return None
+    words = len(text.split())
+    if words < MIN_SOURCE_WORDS:  # paywall, bot block or empty page: no Gemini call, no wasted run time
+        print(f"skipped {s['url']}: only {words} words of page text", file=sys.stderr)
+        return None
     # shortcut: page text capped at 15k chars to bound cost; raise it if reports miss figures from long pieces
     return f"Headline: {s['title']}\nTeaser: {s['summary']}\n\n{text[:15000]}"
 
@@ -178,11 +187,11 @@ def gemini_text(response):
     return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
 
-def synthesize(api_key, s, timeout):
+def synthesize(api_key, material, timeout):
     body = {
         "system_instruction": {"parts": [{"text": writer_prompt()}]},
         "contents": [{"role": "user", "parts": [{
-            "text": f"Write the report from this source material. Use it for facts only, never for wording.\n\n{fenced(source_material(s))}",
+            "text": f"Write the report from this source material. Use it for facts only, never for wording.\n\n{fenced(material)}",
         }]}],
         # "low" thinking: the default ("medium") made reports take over 60s each, so runs timed out
         "generationConfig": {"maxOutputTokens": 8192, "thinkingConfig": {"thinkingLevel": "low"}},
@@ -212,10 +221,10 @@ def gemini_error(e):
             + (f" | retry after {retry}" if retry else ""))
 
 
-def write_report(api_key, s, timeout):
+def write_report(api_key, s, material, timeout):
     """Return (headline, lead, body) from one Gemini attempt, or None; never falls back to the teaser."""
     try:
-        return synthesize(api_key, s, timeout)
+        return synthesize(api_key, material, timeout)
     except urllib.error.HTTPError as e:
         if e.code in (400, 401, 403, 404):  # bad key or retired model: every story would fail the same way
             raise SystemExit(gemini_error(e))
@@ -239,8 +248,8 @@ def to_markdown(s, headline, lead, body):
     )
 
 
-def fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (econ-news-pipeline)"})
+def fetch(url, user_agent=FEED_UA):
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
         return r.read()
 
@@ -270,6 +279,12 @@ def main():
         for s in sorted(fresh.values(), key=lambda s: s["date"], reverse=True):
             if written == LIMIT:
                 break
+            if deadline - time.monotonic() < MIN_TIME_FOR_REPORT:
+                print(f"run time limit of {RUN_LIMIT}s reached; publishing what is written", file=sys.stderr)
+                break
+            material = source_material(s)  # page first: blocked or thin pages are skipped before any Gemini call
+            if material is None:
+                continue
             if calls:
                 time.sleep(REQUEST_GAP)
             remaining = deadline - time.monotonic()
@@ -277,7 +292,7 @@ def main():
                 print(f"run time limit of {RUN_LIMIT}s reached; publishing what is written", file=sys.stderr)
                 break
             calls += 1
-            report = write_report(api_key, s, min(GEMINI_TIMEOUT, remaining))
+            report = write_report(api_key, s, material, min(GEMINI_TIMEOUT, remaining))
             if report is None:
                 continue
             headline, lead, body = report

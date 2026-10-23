@@ -14,6 +14,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20  # RUN_LIMIT stops new reports at 10 min; this is the backstop if anything hangs
     permissions:
       contents: write  # commit new articles and seen_urls.txt back, so stories are never repeated
     steps:
