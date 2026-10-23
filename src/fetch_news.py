@@ -24,9 +24,11 @@ LIMIT = 10
 # ai.google.dev/gemini-api/docs/models when this one retires
 MODEL = "gemini-3.8-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
-ATTEMPTS = 3
-REQUEST_GAP = 7  # seconds before every Gemini request, to stay under the free tier's requests-per-minute limit
-BACKOFF = 15  # seconds after a failed attempt, doubled each time (15, 30, ...)
+REQUEST_GAP = 7  # seconds between Gemini requests, to stay under the free tier's requests-per-minute limit
+FETCH_TIMEOUT = 5  # seconds for feeds and source pages, so dead hosts fail fast
+GEMINI_TIMEOUT = 60  # seconds for one report; also capped by the time left in the run
+RUN_LIMIT = 180  # seconds; after this no new report is started and the run publishes what it has
+MIN_TIME_FOR_REPORT = 20  # seconds; don't start a Gemini call that can't plausibly finish before RUN_LIMIT
 SECTIONS = ("## Market Overview", "## Macroeconomic Implications", "## Key Data & Forecast")
 MIN_WORDS, MAX_WORDS = 350, 550  # prompt asks for 400-500; slack so near misses are kept, not retried
 OUTPUT_FORMAT = """
@@ -160,7 +162,7 @@ def gemini_text(response):
     return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
 
-def synthesize(api_key, s):
+def synthesize(api_key, s, timeout):
     body = {
         "system_instruction": {"parts": [{"text": writer_prompt()}]},
         "contents": [{"role": "user", "parts": [{
@@ -173,25 +175,21 @@ def synthesize(api_key, s):
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json", "x-goog-api-key": api_key},  # header, so the key never lands in URLs or logs
     )
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return parse_report(gemini_text(json.load(r)))
 
 
-def write_report(api_key, s):
-    """Return (headline, lead, body) from Gemini, or None after ATTEMPTS failures; never falls back to the teaser."""
-    for attempt in range(1, ATTEMPTS + 1):
-        time.sleep(REQUEST_GAP)
-        try:
-            return synthesize(api_key, s)
-        except urllib.error.HTTPError as e:
-            if e.code in (400, 401, 403, 404):  # bad key or retired model: every story would fail the same way
-                raise SystemExit(f"Gemini API error {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
-            error = f"Gemini API error {e.code}"
-        except (OSError, ValueError) as e:  # timeouts, network errors, short or malformed reports
-            error = str(e)
-        print(f"  attempt {attempt}/{ATTEMPTS} failed for {s['url']}: {error}", file=sys.stderr)
-        if attempt < ATTEMPTS:
-            time.sleep(BACKOFF * 2 ** (attempt - 1))
+def write_report(api_key, s, timeout):
+    """Return (headline, lead, body) from one Gemini attempt, or None; never falls back to the teaser."""
+    try:
+        return synthesize(api_key, s, timeout)
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 401, 403, 404):  # bad key or retired model: every story would fail the same way
+            raise SystemExit(f"Gemini API error {e.code}: {e.read().decode('utf-8', 'replace')[:500]}")
+        error = f"Gemini API error {e.code}"
+    except (OSError, ValueError) as e:  # timeouts, network errors, short or malformed reports
+        error = str(e)
+    print(f"skipped {s['url']}: {error}", file=sys.stderr)  # not marked seen, so a later run tries it again
     return None
 
 
@@ -210,7 +208,7 @@ def to_markdown(s, headline, lead, body):
 
 def fetch(url):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (econ-news-pipeline)"})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
         return r.read()
 
 
@@ -218,6 +216,7 @@ def main():
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise SystemExit("GEMINI_API_KEY is not set")
+    deadline = time.monotonic() + RUN_LIMIT
     ARTICLES.mkdir(parents=True, exist_ok=True)
     SEEN.parent.mkdir(parents=True, exist_ok=True)
     seen = set(SEEN.read_text(encoding="utf-8").split()) if SEEN.exists() else set()
@@ -233,14 +232,20 @@ def main():
             if s["url"] not in seen and is_macro(s):
                 fresh.setdefault(s["url"], s)
 
-    written = 0
+    written = calls = 0
     with SEEN.open("a", encoding="utf-8") as seen_file:
         for s in sorted(fresh.values(), key=lambda s: s["date"], reverse=True):
             if written == LIMIT:
                 break
-            report = write_report(api_key, s)
+            if calls:
+                time.sleep(REQUEST_GAP)
+            remaining = deadline - time.monotonic()
+            if remaining < MIN_TIME_FOR_REPORT:
+                print(f"run time limit of {RUN_LIMIT}s reached; publishing what is written", file=sys.stderr)
+                break
+            calls += 1
+            report = write_report(api_key, s, min(GEMINI_TIMEOUT, remaining))
             if report is None:
-                print(f"skipped {s['url']}", file=sys.stderr)  # not marked seen, so the next run retries it
                 continue
             headline, lead, body = report
             slug = re.sub(r"[^a-z0-9]+", "-", headline.lower()).strip("-")[:60]
@@ -250,7 +255,7 @@ def main():
             seen_file.flush()
             written += 1
             print(f"{path.relative_to(ROOT)} ({len(body.split())} words)")
-    print(f"{written} new stories" + ("" if written == LIMIT else f" (only {len(fresh)} fresh candidates or too many failures)"))
+    print(f"{written} new stories from {calls} Gemini calls ({len(fresh)} fresh candidates)")
 
 
 if __name__ == "__main__":
