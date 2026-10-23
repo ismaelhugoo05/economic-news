@@ -12,15 +12,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fetch_news import FEEDS
-
 ROOT = Path(__file__).resolve().parent.parent
 ARTICLES = ROOT / "content" / "articles"
 PUBLIC = ROOT / "public"
 APP_JS = Path(__file__).with_name("app.js")
 SITE_TITLE = "Economic News"
 CHART_DAYS = 14
-NEW_HOURS = 36
 
 SOURCES = {
     "cnbc.com": "CNBC", "marketwatch.com": "MarketWatch", "federalreserve.gov": "Federal Reserve",
@@ -29,12 +26,11 @@ SOURCES = {
 
 # (label, Yahoo symbol, invert the quote, price format); quotes are a build-time snapshot, not a live feed
 MARKETS = [
-    ("USD/EUR", "EURUSD=X", True, "{:.4f}"),
     ("S&P 500", "^GSPC", False, "{:,.2f}"),
-    ("CRUDE OIL", "CL=F", False, "${:,.2f}"),
-    ("GOLD", "GC=F", False, "${:,.2f}"),
-    ("US 10Y YIELD", "^TNX", False, "{:.3f}%"),
-    ("BTC/USD", "BTC-USD", False, "${:,.0f}"),
+    ("US 10Y", "^TNX", False, "{:.3f}%"),
+    ("Crude Oil", "CL=F", False, "${:,.2f}"),
+    ("Gold", "GC=F", False, "${:,.2f}"),
+    ("USD/EUR", "EURUSD=X", True, "{:.4f}"),
 ]
 
 # shortcut: first keyword hit (title before summary) picks the badge; upgrade to a classifier if badges look wrong
@@ -51,111 +47,82 @@ TOPICS = [
     ]
 ]
 
-FONTS = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Share+Tech+Mono&display=swap"
+FONTS = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+
+# applied before first paint so a saved dark choice never flashes light
+THEME_BOOT = '<script>try{if(localStorage.getItem("theme")==="dark")document.documentElement.dataset.theme="dark"}catch(e){}</script>'
 
 CSS = """\
-:root{color-scheme:dark;--bg:#070a13;--panel:#0b1120;--panel-hi:#0f1830;--line:#1b2a44;--fg:#e6edf7;--body:#c3cede;--muted:#8a98ae;
---blue:#00f0ff;--amber:#ffb703;--red:#ff003c;--green:#00ff9c;
---mono:"Share Tech Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;--sans:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+:root{color-scheme:light;--bg:#f4f5f7;--card:#fff;--text:#1e293b;--head:#0f172a;--muted:#5b6678;--line:#e2e8f0;
+--accent:#1d4ed8;--badge-bg:#eef2ff;--badge:#3730a3;--up:#047857;--down:#b91c1c;
+--c1:#1d4ed8;--c2:#b45309;--c3:#047857;--c4:#b91c1c;--shadow:0 1px 2px rgb(15 23 42/.05),0 8px 24px -12px rgb(15 23 42/.12);
+--sans:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#0b0f19;--card:#151d2e;--text:#cbd5e1;--head:#f1f5f9;--muted:#94a3b8;--line:#26324a;
+--accent:#e0a84f;--badge-bg:#2a2418;--badge:#e0a84f;--up:#34d399;--down:#f87171;
+--c1:#7aa2f7;--c2:#e0a84f;--c3:#34d399;--c4:#f87171;--shadow:0 1px 2px rgb(0 0 0/.3)}
 *{box-sizing:border-box}
-body{margin:0;background-color:var(--bg);color:var(--body);font:1rem/1.6 var(--sans);-webkit-font-smoothing:antialiased;
-background-image:linear-gradient(color-mix(in srgb,var(--blue) 5%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--blue) 5%,transparent) 1px,transparent 1px);
-background-size:48px 48px}
-body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:10;
-background:repeating-linear-gradient(to bottom,color-mix(in srgb,var(--fg) 3%,transparent) 0 1px,transparent 1px 3px)}
-a{color:var(--blue);text-underline-offset:.15em}
-h1,h2,h3{color:var(--fg);margin:0;line-height:1.25;text-wrap:balance}
-.mono,.status,.ticker,.badge,.src,.flag,.meta,.panel-title,.log,.brand,.crumbs{font-family:var(--mono);letter-spacing:.04em}
+body{margin:0;background:var(--bg);color:var(--text);font:1rem/1.65 var(--sans);-webkit-font-smoothing:antialiased;transition:background-color .3s,color .3s}
+a{color:var(--accent);text-underline-offset:.15em}
+h1,h2,h3{color:var(--head);margin:0;line-height:1.25;letter-spacing:-.015em;text-wrap:balance}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.wrap{max-width:84rem;margin:0 auto;padding:0 1rem}
-.masthead{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
-.bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem 1.5rem;padding-block:.85rem}
-.brand{color:var(--fg);text-decoration:none;font-size:1.35rem;text-transform:uppercase}
-.brand b{color:var(--blue);font-weight:400}
-.cursor{color:var(--blue);animation:blink 1s steps(1) infinite}
-.status{margin:0;display:flex;flex-wrap:wrap;gap:.25rem 1rem;font-size:.75rem;color:var(--muted);text-transform:uppercase}
-.status b{color:var(--green);font-weight:400}
-.dot{display:inline-block;width:.5rem;height:.5rem;margin-right:.35rem;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 1.6s ease-in-out infinite}
-.ticker{overflow:hidden;border-top:1px solid var(--line);font-size:.8125rem;white-space:nowrap}
-.ticker-rail{display:flex;width:max-content;animation:marquee 45s linear infinite}
-.ticker:hover .ticker-rail{animation-play-state:paused}
-.ticker ul{display:flex;margin:0;padding:0;list-style:none}
-.ticker li{padding:.45rem 1.5rem;border-right:1px solid var(--line)}
-.ticker .asof{color:var(--amber)}
-.sym{color:var(--fg)}
-.px{color:var(--body);margin-inline:.5rem}
-.up{color:var(--green)}
-.down{color:var(--red)}
-.up i,.down i{font-style:normal;display:inline-block;animation:nudge 1.4s ease-in-out infinite}
-.down i{animation-direction:reverse}
-.hud{display:grid;gap:1.25rem;padding-block:1.5rem 4rem}
-@media (min-width:64rem){.hud{grid-template-columns:minmax(0,1fr) 22rem;align-items:start}}
-.primary{display:grid;gap:1.25rem;min-width:0}
-.panel{position:relative;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);padding:1rem}
-.panel::before,.panel::after{content:"";position:absolute;width:12px;height:12px;border:2px solid var(--blue);pointer-events:none}
-.panel::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
-.panel::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
-.panel-title{display:flex;justify-content:space-between;gap:1rem;margin:0 0 .75rem;font-size:.75rem;font-weight:400;color:var(--muted);text-transform:uppercase}
-.panel-title b{color:var(--blue);font-weight:400}
+.wrap{max-width:76rem;margin:0 auto;padding:0 1.25rem}
+.masthead{background:var(--card);border-bottom:1px solid var(--line);transition:background-color .3s,border-color .3s}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding-block:1rem}
+.brand{color:var(--head);text-decoration:none;font-weight:700;font-size:1.25rem;letter-spacing:-.02em}
+.bar-end{display:flex;align-items:center;gap:1rem;color:var(--muted);font-size:.8125rem}
+.theme-toggle{font:500 .8125rem var(--sans);color:var(--text);background:transparent;border:1px solid var(--line);border-radius:999px;padding:.35rem .8rem;cursor:pointer;transition:border-color .2s,background-color .2s}
+.theme-toggle:hover{border-color:var(--muted)}
+.theme-toggle:focus-visible,.story-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ticker{border-top:1px solid var(--line);font-size:.8125rem;overflow-x:auto;scrollbar-width:none}
+.ticker::-webkit-scrollbar{display:none}
+.ticker ul{display:flex;gap:1.75rem;margin:0;padding:.5rem 0;list-style:none;white-space:nowrap;font-variant-numeric:tabular-nums}
+.ticker .asof{color:var(--muted)}
+.sym{color:var(--muted);margin-right:.4rem}
+.px{color:var(--head);font-weight:500;margin-right:.35rem}
+.up{color:var(--up)}
+.down{color:var(--down)}
+.layout{display:grid;gap:2.5rem;padding-block:2.5rem 4rem}
+@media (min-width:64rem){.layout{grid-template-columns:minmax(0,1fr) 19rem;align-items:start}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);transition:background-color .3s,border-color .3s}
+.lead{position:relative;padding:clamp(1.75rem,4vw,3rem);display:flex;flex-direction:column;gap:1rem}
+.lead h2{font-size:clamp(1.75rem,3.5vw,2.6rem)}
+.lead .summary{font-size:1.125rem;max-width:62ch;margin:0}
+.kicker{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin:0;font-size:.75rem;color:var(--muted)}
+.badge{font-weight:600;color:var(--badge);background:var(--badge-bg);border-radius:999px;padding:.2rem .6rem}
+.meta{margin:0;font-size:.8125rem;color:var(--muted)}
+.story-link{color:inherit;text-decoration:none}
+.story-link::after{content:"";position:absolute;inset:0}
+.lead:hover h2,.story:hover h3{color:var(--accent)}
+.section-title{font-size:.8125rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:2.75rem 0 0}
+.stories{display:grid;column-gap:2.5rem;margin:0;padding:0;list-style:none}
+@media (min-width:44rem){.stories{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.story{position:relative;display:flex;flex-direction:column;gap:.5rem;padding:1.5rem 0;border-bottom:1px solid var(--line)}
+.story h3{font-size:1.125rem;transition:color .2s}
+.story .summary{margin:0;font-size:.9375rem}
+.side{display:grid;gap:1.25rem}
+@media (min-width:64rem){.side{position:sticky;top:1.5rem}}
+.widget{padding:1.25rem}
+.widget h2{font-size:.9375rem;margin-bottom:.25rem}
+.widget .meta{margin-bottom:.75rem}
 .chart-wrap{position:relative}
-#coverage-chart{display:block;width:100%;height:260px;cursor:crosshair}
-.legend{display:flex;flex-wrap:wrap;gap:.25rem 1rem;margin:.75rem 0 0;padding:0;list-style:none;font:.75rem var(--mono)}
-.legend li::before{content:"";display:inline-block;width:.75rem;height:2px;margin-right:.4rem;vertical-align:middle;background:var(--c);box-shadow:0 0 6px var(--c)}
-.chart-tip{position:absolute;pointer-events:none;background:var(--panel-hi);border:1px solid var(--blue);padding:.4rem .6rem;font:.75rem/1.5 var(--mono);color:var(--fg);box-shadow:0 0 16px color-mix(in srgb,var(--blue) 30%,transparent);white-space:nowrap}
-.briefs{display:grid;gap:1.25rem}
-@media (min-width:40rem){.briefs{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.brief{display:flex;flex-direction:column;gap:.6rem;transition:border-color .2s,box-shadow .2s,transform .2s}
-.brief:hover,.brief:focus-within{border-color:var(--blue);box-shadow:0 0 0 1px var(--blue),0 0 24px color-mix(in srgb,var(--blue) 25%,transparent);transform:translateY(-2px)}
-.brief-head{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin:0}
-.badge{font-size:.7rem;text-transform:uppercase;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 60%,transparent);padding:.1rem .45rem}
-.src{font-size:.7rem;color:var(--muted);text-transform:uppercase}
-.flag{margin-left:auto;font-size:.7rem;color:var(--red);animation:pulse 1.6s ease-in-out infinite}
-.brief h2,.brief h3{font-family:var(--sans);font-weight:700}
-.brief h3{font-size:1.05rem}
-.brief a{color:var(--fg);text-decoration:none}
-.brief a::after{content:"";position:absolute;inset:0}
-.brief:hover h2 a,.brief:hover h3 a,.brief a:focus-visible{color:var(--blue)}
-.brief a:focus-visible{outline:none}
-.summary{margin:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
-.meta{margin:0;margin-top:auto;font-size:.72rem;color:var(--muted);text-transform:uppercase}
-.lead{border-color:color-mix(in srgb,var(--blue) 45%,var(--line));padding:1.5rem}
-.lead h2{font-size:clamp(1.5rem,3vw,2.25rem)}
-.lead .summary{-webkit-line-clamp:5;font-size:1.05rem}
-.sidebar{display:grid;gap:1.25rem;min-width:0}
-@media (min-width:64rem){.sidebar{position:sticky;top:7.5rem}}
-.log{margin:0;padding:0;list-style:none;font-size:.8rem;max-height:28rem;overflow:auto}
-.log li{padding:.45rem 0;border-bottom:1px dashed var(--line);opacity:0;animation:cascade .4s ease-out forwards;animation-delay:calc(var(--i) * 120ms)}
-.log time{color:var(--green)}
-.log .lvl{color:var(--amber)}
-.log a{color:var(--body);text-decoration:none}
-.log a:hover{color:var(--blue)}
-.log .prompt{color:var(--blue);border:0}
-.points{margin:0;padding-left:1.1rem;font-size:.9rem}
-.points li{margin:.5rem 0}
-.points li::marker{color:var(--blue)}
-.story{max-width:720px;margin:0 auto;padding:2rem 1rem 4rem}
-.crumbs{display:flex;gap:.5rem;font-size:.75rem;color:var(--muted);text-transform:uppercase;margin-bottom:1.25rem}
+#coverage-chart{display:block;width:100%;height:170px}
+.legend{display:flex;flex-wrap:wrap;gap:.25rem .9rem;margin:.75rem 0 0;padding:0;list-style:none;font-size:.75rem;color:var(--muted)}
+.legend li::before{content:"";display:inline-block;width:.6rem;height:.6rem;margin-right:.35rem;border-radius:2px;background:var(--c);vertical-align:-.05em}
+.chart-tip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:.45rem .65rem;font-size:.75rem;line-height:1.5;color:var(--text);white-space:nowrap}
+.article{max-width:720px;margin:0 auto;padding:2.5rem 1.25rem 4rem}
+.crumbs{display:flex;gap:.5rem;font-size:.8125rem;color:var(--muted);margin-bottom:1.5rem}
 .crumbs a{text-decoration:none}
-.story header{display:flex;flex-direction:column;gap:1rem;padding-bottom:1.75rem;margin-bottom:2rem;border-bottom:1px solid var(--line)}
-.story h1{font-size:clamp(1.85rem,4.5vw,2.6rem);font-weight:700}
-.story .meta{margin:0}
+.article header{display:flex;flex-direction:column;gap:1rem;padding-bottom:2rem;margin-bottom:2rem;border-bottom:1px solid var(--line)}
+.article h1{font-size:clamp(1.9rem,4.5vw,2.75rem)}
 .prose{font-size:1.0625rem;line-height:1.8}
-.prose h2,.prose h3{margin:2.25rem 0 .75rem;font:400 1.15rem var(--mono);color:var(--blue);text-transform:uppercase;letter-spacing:.06em}
-.prose h2::before{content:"// ";color:var(--muted)}
+.prose h2,.prose h3{margin:2.25rem 0 .75rem;font-size:1.3rem}
 .prose p,.prose ul{margin:0 0 1.25rem}
 .prose ul{padding-left:1.25rem}
 .prose li{margin:.5rem 0}
-.prose li::marker{color:var(--amber)}
-.prose strong{color:var(--fg)}
-.button{align-self:flex-start;font:.8rem var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--blue);border:1px solid var(--blue);padding:.65rem 1rem;text-decoration:none;transition:background-color .2s,color .2s,box-shadow .2s}
-.button:hover,.button:focus-visible{background:var(--blue);color:var(--bg);box-shadow:0 0 18px color-mix(in srgb,var(--blue) 55%,transparent)}
-@keyframes marquee{to{transform:translateX(-50%)}}
-@keyframes pulse{50%{opacity:.35}}
-@keyframes blink{50%{opacity:0}}
-@keyframes nudge{50%{transform:translateY(-2px)}}
-@keyframes cascade{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){*,::before,::after{animation:none!important;transition:none!important}
-.log li{opacity:1}.ticker{overflow-x:auto}.brief:hover,.brief:focus-within{transform:none}}
+.prose strong{color:var(--head)}
+.button{align-self:flex-start;font-weight:600;font-size:.875rem;color:var(--card);background:var(--head);border-radius:8px;padding:.65rem 1.1rem;text-decoration:none;transition:opacity .2s}
+.button:hover,.button:focus-visible{opacity:.85;color:var(--card)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
 """
 
 
@@ -209,6 +176,12 @@ def markdown(body):
     return "\n".join(out)
 
 
+def sentences(text, n):
+    # shortcut: splits after ., ! or ? that follows a lowercase letter, digit, % or ), so "U.S." stays whole
+    parts = re.split(r"(?<=[a-z0-9%)][.!?])\s+(?=[A-Z\"“'‘])", text.strip())
+    return " ".join(parts[:n])
+
+
 def topic_of(title, summary):
     for text in (title, summary):
         for name, pattern in TOPICS:
@@ -226,11 +199,6 @@ def read_minutes(body):
     return max(1, math.ceil(len(body.split()) / 230))
 
 
-def key_point(body):
-    """First bullet of the report (its Key Data section), as inline HTML."""
-    return next((inline(line.strip()[2:]) for line in body.splitlines() if line.strip()[:2] in ("- ", "* ")), "")
-
-
 def parse_date(date):
     try:
         d = datetime.fromisoformat(date)
@@ -239,9 +207,9 @@ def parse_date(date):
         return None
 
 
-def stamp(date):
+def time_tag(date):
     d = parse_date(date)
-    label = f"{d.astimezone(timezone.utc):%Y-%m-%d %H:%M}Z" if d else date[:10]
+    label = f"{d:%b} {d.day}, {d.year}" if d else date[:10]
     return f'<time datetime="{html.escape(date)}">{html.escape(label)}</time>'
 
 
@@ -263,7 +231,7 @@ def market_quotes():
             with urllib.request.urlopen(req, timeout=5) as r:
                 price, change = quote(json.load(r), invert)
         except (OSError, ValueError, KeyError, IndexError, TypeError, ZeroDivisionError) as e:
-            print(f"no quote for {label}: {e}", file=sys.stderr)  # the ticker just leaves that asset out
+            print(f"no quote for {label}: {e}", file=sys.stderr)  # the ticker just leaves that benchmark out
             continue
         quotes.append((label, fmt.format(price), change))
     return quotes
@@ -277,7 +245,7 @@ def coverage_series(stories, today, days=CHART_DAYS, top=4):
     labels = [start + timedelta(days=i) for i in range(days)]
     counts = Counter((s["topic"], s["dt"].date()) for s in window)
     return {
-        "days": [f"{d:%m-%d}" for d in labels],
+        "days": [f"{d:%b} {d.day}" for d in labels],
         "series": [{"name": n, "values": [counts[(n, d)] for d in labels]} for n in names],
     }
 
@@ -287,22 +255,22 @@ def ticker(quotes, synced):
         return ""
     items = "".join(
         f'<li><span class="sym">{label}</span><span class="px">{px}</span>'
-        f'<span class="{"up" if chg >= 0 else "down"}"><i aria-hidden="true">{"▲" if chg >= 0 else "▼"}</i> {chg:+.2f}%</span></li>'
+        f'<span class="{"up" if chg >= 0 else "down"}">{"▲" if chg >= 0 else "▼"} {abs(chg):.2f}%</span></li>'
         for label, px, chg in quotes
     )
-    track = f'<li class="asof">MARKETS @ {synced}</li>{items}'
     return (
-        f'<div class="ticker" role="region" aria-label="Market snapshot at {synced}">'
-        f'<div class="ticker-rail"><ul>{track}</ul><ul aria-hidden="true">{track}</ul></div></div>'
+        f'<div class="ticker" role="region" aria-label="Market snapshot"><div class="wrap">'
+        f'<ul>{items}<li class="asof">as of {synced}</li></ul></div></div>'
     )
 
 
-def masthead(root, quotes, synced, built):
+def masthead(root, quotes, built):
+    synced = f"{built:%b} {built.day}, {built:%H:%M} UTC"
     return f"""<header class="masthead">
 <div class="wrap bar">
-<a class="brand" href="{root}index.html"><b>&#9698;</b> {SITE_TITLE}<span class="cursor" aria-hidden="true">_</span></a>
-<p class="status"><span><span class="dot" aria-hidden="true"></span>Feed: <b>Online</b></span><span>Sources: {len(FEEDS)}</span>
-<span>Last sync: <time datetime="{built.isoformat()}">{synced}</time></span><span>UTC <time id="clock">{built:%H:%M:%S}</time></span></p>
+<a class="brand" href="{root}index.html">{SITE_TITLE}</a>
+<div class="bar-end"><span>Updated {built:%b} {built.day}, {built.year}</span>
+<button class="theme-toggle" type="button" hidden>&#9790; Dark</button></div>
 </div>
 {ticker(quotes, synced)}
 </header>"""
@@ -314,8 +282,8 @@ def page(title, content, root, header):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
 <title>{html.escape(title)}</title>
+{THEME_BOOT}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="{FONTS}">
@@ -330,43 +298,38 @@ def page(title, content, root, header):
 """
 
 
-def brief(s, now, heading="h3", extra=""):
-    new = '<span class="flag">&#9679; New</span>' if s["dt"] and now - s["dt"] < timedelta(hours=NEW_HOURS) else ""
+def kicker(s):
+    return f'<p class="kicker"><span class="badge">{s["topic"]}</span><span>{html.escape(s["source"])}</span></p>'
+
+
+def lead_card(s):
     return (
-        f'<article class="panel brief{extra}">'
-        f'<p class="brief-head"><span class="badge">{s["topic"]}</span><span class="src">{html.escape(s["source"])}</span>{new}</p>'
-        f'<{heading}><a href="articles/{s["slug"]}.html">{html.escape(s["title"])}</a></{heading}>'
-        f'<p class="summary">{html.escape(s["summary"])}</p>'
-        f'<p class="meta">{stamp(s["date"])} · {s["minutes"]} min read · Brief #{s["slug"][-6:].upper()}</p></article>'
+        f'<article class="card lead">{kicker(s)}'
+        f'<h2><a class="story-link" href="articles/{s["slug"]}.html">{html.escape(s["title"])}</a></h2>'
+        f'<p class="summary">{html.escape(sentences(s["summary"], 2))}</p>'
+        f'<p class="meta">{time_tag(s["date"])} · {s["minutes"]} min read</p></article>'
     )
 
 
-def chart_panel(series):
-    colors = ["--blue", "--amber", "--red", "--green"]
-    legend = "".join(f'<li style="--c:var({c})">{html.escape(s["name"])}</li>' for s, c in zip(series["series"], colors))
+def story_item(s):
+    return (
+        f'<li class="story">{kicker(s)}'
+        f'<h3><a class="story-link" href="articles/{s["slug"]}.html">{html.escape(s["title"])}</a></h3>'
+        f'<p class="summary">{html.escape(sentences(s["summary"], 1))}</p>'
+        f'<p class="meta">{time_tag(s["date"])} · {s["minutes"]} min read</p></li>'
+    )
+
+
+def chart_card(series):
+    legend = "".join(f'<li style="--c:var(--c{i})">{html.escape(s["name"])}</li>' for i, s in enumerate(series["series"], 1))
     totals = ", ".join(f'{s["name"]} {sum(s["values"])}' for s in series["series"]) or "no stories"
+    data = json.dumps(series).replace("</", "<\\/")
     return (
-        f'<section class="panel" aria-labelledby="chart-title">'
-        f'<h2 class="panel-title" id="chart-title"><span>Macro coverage // stories per topic</span><b>{CHART_DAYS}D</b></h2>'
-        f'<div class="chart-wrap"><canvas id="coverage-chart" role="img" aria-label="Stories per day over the last {CHART_DAYS} days: {totals}"></canvas>'
+        f'<section class="card widget" aria-labelledby="chart-title"><h2 id="chart-title">Coverage by topic</h2>'
+        f'<p class="meta">Stories per day, last {CHART_DAYS} days</p>'
+        f'<div class="chart-wrap"><canvas id="coverage-chart" role="img" aria-label="Stories per topic over the last {CHART_DAYS} days: {totals}"></canvas>'
         f'<div class="chart-tip" id="chart-tip" hidden></div></div><ul class="legend">{legend}</ul>'
-        f'<script type="application/json" id="coverage-data">{json.dumps(series).replace("</", "<\\/")}</script></section>'
-    )
-
-
-def sidebar(stories):
-    log = "".join(
-        f'<li style="--i:{i}">{stamp(s["date"])} <span class="lvl">[{s["topic"].upper()}]</span> '
-        f'<a href="articles/{s["slug"]}.html">{html.escape(s["title"])}</a></li>'
-        for i, s in enumerate(stories[:12])
-    )
-    points = "".join(f"<li>{s['point']}</li>" for s in stories[:6] if s["point"])
-    return (
-        f'<aside class="sidebar">'
-        f'<section class="panel" aria-labelledby="log-title"><h2 class="panel-title" id="log-title"><span>System log // terminal feed</span><b>LIVE</b></h2>'
-        f'<ol class="log">{log}<li class="prompt" style="--i:{min(len(stories), 12)}">&gt; awaiting next sync<span class="cursor">_</span></li></ol></section>'
-        f'<section class="panel" aria-labelledby="points-title"><h2 class="panel-title" id="points-title"><span>Key data</span><b>{len(stories[:6])}</b></h2>'
-        f'<ul class="points">{points}</ul></section></aside>'
+        f'<script type="application/json" id="coverage-data">{data}</script></section>'
     )
 
 
@@ -377,11 +340,10 @@ def article_page(s):
         if url.startswith(("https://", "http://")) else ""
     )
     return (
-        f'<main class="story"><article>\n<nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a>'
+        f'<main class="article"><article>\n<nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a>'
         f'<span aria-hidden="true">/</span><span aria-current="page">{s["topic"]}</span></nav>\n'
-        f'<header><p class="brief-head"><span class="badge">{s["topic"]}</span><span class="src">{html.escape(s["source"])}</span></p>\n'
-        f'<h1>{html.escape(s["title"])}</h1>\n'
-        f'<p class="meta">{stamp(s["date"])} · {s["minutes"]} min read · Brief #{s["slug"][-6:].upper()}</p>\n{button}\n</header>\n'
+        f'<header>{kicker(s)}\n<h1>{html.escape(s["title"])}</h1>\n'
+        f'<p class="meta">{time_tag(s["date"])} · {s["minutes"]} min read</p>\n{button}\n</header>\n'
         f'<div class="prose">\n{s["body"]}\n</div>\n</article></main>'
     )
 
@@ -394,7 +356,6 @@ def main():
     shutil.copyfile(APP_JS, PUBLIC / "app.js")
 
     built = datetime.now(timezone.utc)
-    synced = f"{built:%Y-%m-%d %H:%M} UTC"
     quotes = market_quotes()
     stories = []
     for path in ARTICLES.glob("*.md"):
@@ -403,27 +364,27 @@ def main():
         stories.append({
             "slug": path.stem, "title": title, "summary": summary, "date": meta.get("date", ""), "dt": parse_date(meta.get("date", "")),
             "url": url, "source": source_name(url), "topic": topic_of(title, summary), "minutes": read_minutes(body),
-            "body": markdown(body), "point": key_point(body),
+            "body": markdown(body),
         })
     stories.sort(key=lambda s: s["date"], reverse=True)
 
     for s in stories:
-        header = masthead("../", quotes, synced, built)
+        header = masthead("../", quotes, built)
         (PUBLIC / "articles" / f"{s['slug']}.html").write_text(page(s["title"], article_page(s), "../", header), encoding="utf-8")
 
     if stories:
-        # the newest story leads; the home page shows 10, older articles keep their pages and stay in the log
+        # the newest story leads; the home page shows 10, older articles keep their pages
         lead, rest = stories[0], stories[1:10]
-        primary = (
-            f'<div class="primary">{chart_panel(coverage_series(stories, built.date()))}\n'
-            f'<section aria-label="Lead story">{brief(lead, built, "h2", " lead")}</section>\n'
-            f'<section aria-labelledby="briefs-title"><h2 class="sr-only" id="briefs-title">Latest briefs</h2>'
-            f'<div class="briefs">' + "".join(brief(s, built) for s in rest) + "</div></section></div>"
+        content = (
+            f'<main class="wrap layout"><h1 class="sr-only">{SITE_TITLE}</h1>\n<div>'
+            f'<section aria-label="Lead story">{lead_card(lead)}</section>\n'
+            f'<section aria-labelledby="latest"><h2 class="section-title" id="latest">Latest</h2>'
+            f'<ul class="stories">' + "".join(story_item(s) for s in rest) + "</ul></section></div>\n"
+            f'<aside class="side">{chart_card(coverage_series(stories, built.date()))}</aside>\n</main>'
         )
-        content = f'<main class="wrap hud"><h1 class="sr-only">{SITE_TITLE}</h1>\n{primary}\n{sidebar(stories)}\n</main>'
     else:
-        content = '<main class="wrap hud"><p>No stories yet.</p></main>'
-    (PUBLIC / "index.html").write_text(page(SITE_TITLE, content, "", masthead("", quotes, synced, built)), encoding="utf-8")
+        content = '<main class="wrap layout"><p>No stories yet.</p></main>'
+    (PUBLIC / "index.html").write_text(page(SITE_TITLE, content, "", masthead("", quotes, built)), encoding="utf-8")
     print(f"built {len(stories)} articles into {PUBLIC.relative_to(ROOT)}/ ({len(quotes)} market quotes)")
 
 
