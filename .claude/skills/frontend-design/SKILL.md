@@ -1,15 +1,14 @@
 ---
 name: frontend-design
-description: Design rules for the static site in public/ (built by src/build_site.py and src/app.js) - calm editorial layout, light/dark toggle, honest data.
+description: Design rules for the static site in public/ (built by src/build_site.py) - World Economy Watch, a print-style financial broadsheet on newsprint cream.
 ---
 # Frontend Design Skill
 
-When changing the site's HTML, CSS or JS (the templates and `CSS` string in `src/build_site.py`, and `src/app.js`, which the build copies to `public/`):
-1. **Calm first**: Clear hierarchy and breathing room. No diagnostic readouts, fake terminal logs, scanlines, glows, blinking or flashing. Motion is limited to short color/background transitions.
-2. **Dependencies**: Google Fonts `Inter` and nothing else. No frameworks, chart libraries or CDNs; the chart is vanilla Canvas in `app.js`. The site must stay readable if fonts or JS fail to load (the theme toggle only appears when JS runs).
-3. **Semantic HTML5**: `main`, `article`, `aside`, `header`, `nav`, `time datetime=...`, one `h1` per page (visually hidden on the home page).
-4. **Theme**: Light is the default: `#f4f5f7` page, `#fff` cards, `#1e293b` text, `#0f172a` headlines, `#e2e8f0` borders. Dark (`:root[data-theme="dark"]`): `#0b0f19` page, `#151d2e` cards, light grey text, muted amber/emerald accents, no pure black or neon. The toggle stores `theme` in `localStorage`; an inline head script applies a saved dark choice before first paint. Colors live only as custom properties in those two blocks, chart series use `--c1`..`--c4`.
-5. **Layout**: Home page: one lead story card (headline, 2-sentence summary, generous padding), then the next 9 stories in a 2-column list with divider lines; the coverage chart is a compact card in the sidebar. Article pages are a 720px reading column.
-6. **Honest data**: Ticker values are a build-time Yahoo Finance snapshot labelled "as of" its time (S&P 500, US 10Y, crude, gold, USD/EUR); the chart plots real story counts. Never show invented prices or metrics.
-7. **Accessibility**: Text contrast at least 4.5:1 in both themes, visible focus outlines, whole cards clickable, transitions off under `prefers-reduced-motion`, no horizontal page scroll at 320px.
-8. **Safety**: All article text goes through `html.escape`; links only allow `http(s)` URLs; JSON embedded in `<script>` escapes `</`.
+When changing the site's HTML or CSS (the templates and `CSS` string in `src/build_site.py`):
+1. **A newspaper, not an app**: No cards, drop shadows, rounded corners, pill badges, charts, canvas widgets, theme toggles, live readouts or JavaScript. Sections are divided with hairline rules like a broadsheet.
+2. **Palette**: Newsprint cream `#faf7f2` page, ink `#111827` headlines, `#1f2937` body text, `#57534e` secondary text, `#e5e0d8` hairlines, `#111827` for strong rules, burgundy `#881337` for section labels and the source link. Colors live only as custom properties on `:root`. Light only.
+3. **Typography**: Google Fonts `Playfair Display` for the nameplate and all headlines; `Source Serif 4` for body, standfirsts and labels. Section labels are small uppercase burgundy with wide tracking. Article pages open with a drop cap.
+4. **Layout**: Masthead = edition line (Global Edition, full date, Published daily) over a hairline, the "World Economy Watch" nameplate, then a double rule with the markets line. Front page = one lead story (grand headline beside a 2-sentence standfirst and the "Global Desk — <date>" dateline), then "Latest Reports" in a 3-column grid with 1px hairline dividers (one column below 56rem). Article pages are a 42rem reading column.
+5. **Honest data**: The markets line is a build-time Yahoo Finance snapshot labelled "Markets as of <time>"; never show invented prices. Every article credits its primary source.
+6. **Semantic HTML5 & accessibility**: `main`, `article`, `header`, `footer`, `time datetime=...`, one `h1` per page (visually hidden on the front page). Text contrast at least 4.5:1, visible focus outlines, no horizontal page scroll at 320px.
+7. **Safety**: All article text goes through `html.escape`; links only allow `http(s)` URLs.

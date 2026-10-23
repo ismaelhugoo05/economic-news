@@ -1,8 +1,7 @@
 import unittest
-from datetime import date, datetime, timezone
 
 from build_site import (
-    coverage_series, markdown, parse_article, quote, read_minutes, sentences, source_name, ticker, topic_of,
+    dateline, markdown, markets_line, parse_article, quote, read_minutes, sentences, source_name, topic_of,
 )
 
 ARTICLE = """---
@@ -40,26 +39,23 @@ class BuildSiteTest(unittest.TestCase):
         self.assertEqual(sentences(text, 2), "U.S. prices rose 0.3% in September. Yields fell to 4.1%.")
         self.assertEqual(sentences(text, 1), "U.S. prices rose 0.3% in September.")
 
-    def test_quote_and_ticker(self):
+    def test_quote_and_markets_line(self):
         chart = {"chart": {"result": [{"indicators": {"quote": [{"close": [1.10, None, 1.12, 1.10]}]}}]}}
         price, change = quote(chart)
         self.assertEqual((price, round(change, 2)), (1.10, -1.79))
         inv_price, inv_change = quote(chart, invert=True)
         self.assertAlmostEqual(inv_price, 1 / 1.10)
         self.assertGreater(inv_change, 0)  # EUR falling means USD/EUR rising
-        html_out = ticker([("Gold", "$4,007.90", -3.66), ("S&P 500", "7,623.68", 0.5)], "Oct 24, 06:00 UTC")
-        self.assertIn('<span class="down">▼ 3.66%</span>', html_out)
-        self.assertIn('<span class="up">▲ 0.50%</span>', html_out)
-        self.assertIn("as of Oct 24, 06:00 UTC", html_out)
-        self.assertEqual(ticker([], "x"), "")
+        line = markets_line([("Gold", "$4,007.90", -3.66), ("S&P 500", "7,623.68", 0.5)], "06:00 UTC")
+        self.assertIn('<li>Gold<b>$4,007.90</b><span class="down">▼ 3.66%</span></li>', line)
+        self.assertIn('<span class="up">▲ 0.50%</span>', line)
+        self.assertIn("Markets as of 06:00 UTC", line)
+        self.assertEqual(markets_line([], "x"), '<div class="rule-only"></div>')  # rules stay even without quotes
 
-    def test_coverage_series(self):
-        at = lambda d: datetime(2026, 10, d, 12, tzinfo=timezone.utc)  # noqa: E731
-        stories = [{"topic": "Inflation", "dt": at(23)}, {"topic": "Inflation", "dt": at(24)},
-                   {"topic": "Trade", "dt": at(24)}, {"topic": "Fiscal", "dt": at(1)}, {"topic": "Trade", "dt": None}]
-        series = coverage_series(stories, date(2026, 10, 24), days=3)
-        self.assertEqual(series["days"], ["Oct 22", "Oct 23", "Oct 24"])
-        self.assertEqual(series["series"], [{"name": "Inflation", "values": [0, 1, 1]}, {"name": "Trade", "values": [0, 0, 1]}])
+    def test_dateline(self):
+        s = {"date": "2026-10-23T22:00:00+00:00", "minutes": 3}
+        self.assertEqual(dateline(s), '<p class="dateline"><b>Global Desk</b> — '
+                         '<time datetime="2026-10-23T22:00:00+00:00">October 23, 2026</time> · 3 min read</p>')
 
 
 if __name__ == "__main__":

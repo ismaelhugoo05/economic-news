@@ -1,4 +1,4 @@
-"""Build public/ (index, article pages, style.css, app.js) from content/articles/*.md."""
+"""Build public/ (index, article pages, style.css) from content/articles/*.md."""
 import html
 import json
 import math
@@ -7,17 +7,15 @@ import shutil
 import sys
 import urllib.parse
 import urllib.request
-from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 ARTICLES = ROOT / "content" / "articles"
 PUBLIC = ROOT / "public"
-APP_JS = Path(__file__).with_name("app.js")
-SITE_TITLE = "Economic News"
-CHART_DAYS = 14
+SITE_TITLE = "World Economy Watch"
+DESK = "Global Desk"
 
 SOURCES = {
     "cnbc.com": "CNBC", "marketwatch.com": "MarketWatch", "federalreserve.gov": "Federal Reserve",
@@ -33,7 +31,7 @@ MARKETS = [
     ("USD/EUR", "EURUSD=X", True, "{:.4f}"),
 ]
 
-# shortcut: first keyword hit (title before summary) picks the badge; upgrade to a classifier if badges look wrong
+# shortcut: first keyword hit (title before summary) picks the section label; upgrade to a classifier if labels look wrong
 TOPICS = [
     (name, re.compile(rf"\b({words})\b", re.I))
     for name, words in [
@@ -47,82 +45,70 @@ TOPICS = [
     ]
 ]
 
-FONTS = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-
-# applied before first paint so a saved dark choice never flashes light
-THEME_BOOT = '<script>try{if(localStorage.getItem("theme")==="dark")document.documentElement.dataset.theme="dark"}catch(e){}</script>'
+FONTS = (
+    "https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;0,800;1,600"
+    "&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap"
+)
 
 CSS = """\
-:root{color-scheme:light;--bg:#f4f5f7;--card:#fff;--text:#1e293b;--head:#0f172a;--muted:#5b6678;--line:#e2e8f0;
---accent:#1d4ed8;--badge-bg:#eef2ff;--badge:#3730a3;--up:#047857;--down:#b91c1c;
---c1:#1d4ed8;--c2:#b45309;--c3:#047857;--c4:#b91c1c;--shadow:0 1px 2px rgb(15 23 42/.05),0 8px 24px -12px rgb(15 23 42/.12);
---sans:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-:root[data-theme="dark"]{color-scheme:dark;--bg:#0b0f19;--card:#151d2e;--text:#cbd5e1;--head:#f1f5f9;--muted:#94a3b8;--line:#26324a;
---accent:#e0a84f;--badge-bg:#2a2418;--badge:#e0a84f;--up:#34d399;--down:#f87171;
---c1:#7aa2f7;--c2:#e0a84f;--c3:#34d399;--c4:#f87171;--shadow:0 1px 2px rgb(0 0 0/.3)}
+:root{color-scheme:light;--paper:#faf7f2;--ink:#111827;--body:#1f2937;--muted:#57534e;--rule:#e5e0d8;--rule-strong:#111827;
+--accent:#881337;--up:#166534;--down:#9f1239;
+--display:"Playfair Display",Georgia,"Times New Roman",serif;--serif:"Source Serif 4",Georgia,"Times New Roman",serif}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:1rem/1.65 var(--sans);-webkit-font-smoothing:antialiased;transition:background-color .3s,color .3s}
-a{color:var(--accent);text-underline-offset:.15em}
-h1,h2,h3{color:var(--head);margin:0;line-height:1.25;letter-spacing:-.015em;text-wrap:balance}
+body{margin:0;background:var(--paper);color:var(--body);font:1.0625rem/1.65 var(--serif);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration-thickness:1px;text-underline-offset:.15em}
+h1,h2,h3{font-family:var(--display);color:var(--ink);margin:0;line-height:1.15;text-wrap:balance}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.wrap{max-width:76rem;margin:0 auto;padding:0 1.25rem}
-.masthead{background:var(--card);border-bottom:1px solid var(--line);transition:background-color .3s,border-color .3s}
-.bar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding-block:1rem}
-.brand{color:var(--head);text-decoration:none;font-weight:700;font-size:1.25rem;letter-spacing:-.02em}
-.bar-end{display:flex;align-items:center;gap:1rem;color:var(--muted);font-size:.8125rem}
-.theme-toggle{font:500 .8125rem var(--sans);color:var(--text);background:transparent;border:1px solid var(--line);border-radius:999px;padding:.35rem .8rem;cursor:pointer;transition:border-color .2s,background-color .2s}
-.theme-toggle:hover{border-color:var(--muted)}
-.theme-toggle:focus-visible,.story-link:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.ticker{border-top:1px solid var(--line);font-size:.8125rem;overflow-x:auto;scrollbar-width:none}
-.ticker::-webkit-scrollbar{display:none}
-.ticker ul{display:flex;gap:1.75rem;margin:0;padding:.5rem 0;list-style:none;white-space:nowrap;font-variant-numeric:tabular-nums}
-.ticker .asof{color:var(--muted)}
-.sym{color:var(--muted);margin-right:.4rem}
-.px{color:var(--head);font-weight:500;margin-right:.35rem}
+.wrap{max-width:74rem;margin:0 auto;padding:0 1.25rem}
+.masthead{padding-top:1rem;text-align:center}
+.topline{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.25rem 1rem;padding-bottom:.6rem;border-bottom:1px solid var(--rule);
+font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.nameplate{display:block;padding:1.1rem 0 .9rem;font:800 clamp(2.1rem,7vw,4.5rem)/1 var(--display);letter-spacing:-.01em;color:var(--ink);text-decoration:none}
+.markets{display:flex;flex-wrap:wrap;justify-content:center;gap:.35rem 1.75rem;margin:0;padding:.55rem 0;list-style:none;
+border-top:3px double var(--rule-strong);border-bottom:1px solid var(--rule-strong);font-size:.8125rem;font-variant-numeric:tabular-nums;color:var(--muted)}
+.markets b{color:var(--ink);font-weight:600;margin:0 .3rem}
+.markets .asof{font-style:italic}
 .up{color:var(--up)}
 .down{color:var(--down)}
-.layout{display:grid;gap:2.5rem;padding-block:2.5rem 4rem}
-@media (min-width:64rem){.layout{grid-template-columns:minmax(0,1fr) 19rem;align-items:start}}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);transition:background-color .3s,border-color .3s}
-.lead{position:relative;padding:clamp(1.75rem,4vw,3rem);display:flex;flex-direction:column;gap:1rem}
-.lead h2{font-size:clamp(1.75rem,3.5vw,2.6rem)}
-.lead .summary{font-size:1.125rem;max-width:62ch;margin:0}
-.kicker{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;margin:0;font-size:.75rem;color:var(--muted)}
-.badge{font-weight:600;color:var(--badge);background:var(--badge-bg);border-radius:999px;padding:.2rem .6rem}
-.meta{margin:0;font-size:.8125rem;color:var(--muted)}
-.story-link{color:inherit;text-decoration:none}
-.story-link::after{content:"";position:absolute;inset:0}
-.lead:hover h2,.story:hover h3{color:var(--accent)}
-.section-title{font-size:.8125rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:2.75rem 0 0}
-.stories{display:grid;column-gap:2.5rem;margin:0;padding:0;list-style:none}
-@media (min-width:44rem){.stories{grid-template-columns:repeat(2,minmax(0,1fr))}}
-.story{position:relative;display:flex;flex-direction:column;gap:.5rem;padding:1.5rem 0;border-bottom:1px solid var(--line)}
-.story h3{font-size:1.125rem;transition:color .2s}
-.story .summary{margin:0;font-size:.9375rem}
-.side{display:grid;gap:1.25rem}
-@media (min-width:64rem){.side{position:sticky;top:1.5rem}}
-.widget{padding:1.25rem}
-.widget h2{font-size:.9375rem;margin-bottom:.25rem}
-.widget .meta{margin-bottom:.75rem}
-.chart-wrap{position:relative}
-#coverage-chart{display:block;width:100%;height:170px}
-.legend{display:flex;flex-wrap:wrap;gap:.25rem .9rem;margin:.75rem 0 0;padding:0;list-style:none;font-size:.75rem;color:var(--muted)}
-.legend li::before{content:"";display:inline-block;width:.6rem;height:.6rem;margin-right:.35rem;border-radius:2px;background:var(--c);vertical-align:-.05em}
-.chart-tip{position:absolute;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:.45rem .65rem;font-size:.75rem;line-height:1.5;color:var(--text);white-space:nowrap}
-.article{max-width:720px;margin:0 auto;padding:2.5rem 1.25rem 4rem}
-.crumbs{display:flex;gap:.5rem;font-size:.8125rem;color:var(--muted);margin-bottom:1.5rem}
+.rule-only{border-top:3px double var(--rule-strong);border-bottom:1px solid var(--rule-strong);height:6px}
+.label{display:block;margin:0 0 .6rem;font:600 .75rem/1.2 var(--serif);letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+.dateline{margin:0;font-size:.8125rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.dateline b{color:var(--ink);font-weight:600}
+.story-link{text-decoration:none}
+.story-link:hover,.story-link:focus-visible{text-decoration:underline}
+.story-link:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+main{padding-bottom:4rem}
+.lead{padding:2.5rem 0;border-bottom:1px solid var(--rule-strong);display:grid;gap:1rem}
+@media (min-width:64rem){.lead{grid-template-columns:minmax(0,3fr) minmax(0,2fr);column-gap:3rem;align-items:start}}
+.lead h2{font-size:clamp(2.1rem,5vw,3.75rem);font-weight:700;letter-spacing:-.015em}
+.lead .standfirst{margin:0 0 1rem;font-size:1.25rem;line-height:1.55;color:var(--body)}
+@media (min-width:64rem){.lead-side{border-left:1px solid var(--rule);padding-left:3rem}}
+.section-head{display:flex;align-items:baseline;gap:1rem;margin:2.25rem 0 0;padding-bottom:.5rem;border-bottom:1px solid var(--rule-strong);
+font:700 1.05rem var(--display);color:var(--ink)}
+.grid{display:grid;grid-template-columns:1fr;gap:1px;background:var(--rule);margin:0;padding:0;list-style:none;border-bottom:1px solid var(--rule)}
+@media (min-width:56rem){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.item{background:var(--paper);padding:1.5rem 0;display:flex;flex-direction:column;gap:.55rem}
+@media (min-width:56rem){.item{padding:1.5rem 1.75rem}.item:nth-child(3n+1){padding-left:0}.item:nth-child(3n){padding-right:0}}
+.item h3{font-size:1.35rem;font-weight:700}
+.item p{margin:0}
+.item .dateline{margin-top:auto;padding-top:.25rem}
+.article{max-width:42rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}
+.crumbs{margin:0 0 1.5rem;font-size:.8125rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .crumbs a{text-decoration:none}
-.article header{display:flex;flex-direction:column;gap:1rem;padding-bottom:2rem;margin-bottom:2rem;border-bottom:1px solid var(--line)}
-.article h1{font-size:clamp(1.9rem,4.5vw,2.75rem)}
-.prose{font-size:1.0625rem;line-height:1.8}
-.prose h2,.prose h3{margin:2.25rem 0 .75rem;font-size:1.3rem}
+.crumbs a:hover{text-decoration:underline}
+.article header{padding-bottom:1.5rem;margin-bottom:2rem;border-bottom:1px solid var(--rule-strong);display:grid;gap:1rem}
+.article h1{font-size:clamp(2.1rem,5vw,3.25rem);font-weight:700;letter-spacing:-.015em}
+.source-link{font-size:.9375rem;font-style:italic;color:var(--accent)}
+.prose{font-size:1.1875rem;line-height:1.75}
+.prose > p:first-child::first-letter{float:left;font:700 3.6em/.82 var(--display);margin:.06em .1em 0 0;color:var(--ink)}
+.prose h2,.prose h3{margin:2.25rem 0 .75rem;padding-top:.75rem;border-top:1px solid var(--rule);font-size:1.4rem}
 .prose p,.prose ul{margin:0 0 1.25rem}
 .prose ul{padding-left:1.25rem}
 .prose li{margin:.5rem 0}
-.prose strong{color:var(--head)}
-.button{align-self:flex-start;font-weight:600;font-size:.875rem;color:var(--card);background:var(--head);border-radius:8px;padding:.65rem 1.1rem;text-decoration:none;transition:opacity .2s}
-.button:hover,.button:focus-visible{opacity:.85;color:var(--card)}
-@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+.prose li::marker{color:var(--accent)}
+.prose strong{color:var(--ink)}
+.prose a{color:var(--accent)}
+.colophon{border-top:1px solid var(--rule-strong);padding:1.25rem 0 2.5rem;font-size:.8125rem;color:var(--muted);text-align:center}
 """
 
 
@@ -207,10 +193,14 @@ def parse_date(date):
         return None
 
 
-def time_tag(date):
-    d = parse_date(date)
-    label = f"{d:%b} {d.day}, {d.year}" if d else date[:10]
-    return f'<time datetime="{html.escape(date)}">{html.escape(label)}</time>'
+def long_date(d):
+    return f"{d:%B} {d.day}, {d.year}"
+
+
+def dateline(s):
+    d = parse_date(s["date"])
+    when = f'<time datetime="{html.escape(s["date"])}">{long_date(d) if d else html.escape(s["date"][:10])}</time>'
+    return f'<p class="dateline"><b>{DESK}</b> — {when} · {s["minutes"]} min read</p>'
 
 
 def quote(chart, invert=False):
@@ -231,48 +221,28 @@ def market_quotes():
             with urllib.request.urlopen(req, timeout=5) as r:
                 price, change = quote(json.load(r), invert)
         except (OSError, ValueError, KeyError, IndexError, TypeError, ZeroDivisionError) as e:
-            print(f"no quote for {label}: {e}", file=sys.stderr)  # the ticker just leaves that benchmark out
+            print(f"no quote for {label}: {e}", file=sys.stderr)  # the markets line just leaves that benchmark out
             continue
         quotes.append((label, fmt.format(price), change))
     return quotes
 
 
-def coverage_series(stories, today, days=CHART_DAYS, top=4):
-    """Stories per day for the most-covered topics over the last `days` days."""
-    start = today - timedelta(days=days - 1)
-    window = [s for s in stories if s["dt"] and start <= s["dt"].date() <= today]
-    names = [name for name, _ in Counter(s["topic"] for s in window).most_common(top)]
-    labels = [start + timedelta(days=i) for i in range(days)]
-    counts = Counter((s["topic"], s["dt"].date()) for s in window)
-    return {
-        "days": [f"{d:%b} {d.day}" for d in labels],
-        "series": [{"name": n, "values": [counts[(n, d)] for d in labels]} for n in names],
-    }
-
-
-def ticker(quotes, synced):
+def markets_line(quotes, synced):
     if not quotes:
-        return ""
+        return '<div class="rule-only"></div>'
     items = "".join(
-        f'<li><span class="sym">{label}</span><span class="px">{px}</span>'
-        f'<span class="{"up" if chg >= 0 else "down"}">{"▲" if chg >= 0 else "▼"} {abs(chg):.2f}%</span></li>'
+        f'<li>{label}<b>{px}</b><span class="{"up" if chg >= 0 else "down"}">{"▲" if chg >= 0 else "▼"} {abs(chg):.2f}%</span></li>'
         for label, px, chg in quotes
     )
-    return (
-        f'<div class="ticker" role="region" aria-label="Market snapshot"><div class="wrap">'
-        f'<ul>{items}<li class="asof">as of {synced}</li></ul></div></div>'
-    )
+    return f'<ul class="markets" aria-label="Markets">{items}<li class="asof">Markets as of {synced}</li></ul>'
 
 
 def masthead(root, quotes, built):
-    synced = f"{built:%b} {built.day}, {built:%H:%M} UTC"
-    return f"""<header class="masthead">
-<div class="wrap bar">
-<a class="brand" href="{root}index.html">{SITE_TITLE}</a>
-<div class="bar-end"><span>Updated {built:%b} {built.day}, {built.year}</span>
-<button class="theme-toggle" type="button" hidden>&#9790; Dark</button></div>
-</div>
-{ticker(quotes, synced)}
+    synced = f"{built:%H:%M} UTC"
+    return f"""<header class="masthead wrap">
+<div class="topline"><span>Global Edition</span><span>{built:%A}, {long_date(built)}</span><span>Published daily</span></div>
+<a class="nameplate" href="{root}index.html">{SITE_TITLE}</a>
+{markets_line(quotes, synced)}
 </header>"""
 
 
@@ -282,68 +252,47 @@ def page(title, content, root, header):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
 <title>{html.escape(title)}</title>
-{THEME_BOOT}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="{FONTS}">
 <link rel="stylesheet" href="{root}style.css">
-<script src="{root}app.js" defer></script>
 </head>
 <body>
 {header}
 {content}
+<footer class="colophon wrap">{SITE_TITLE} · Reports are synthesized from the primary sources credited in each article.</footer>
 </body>
 </html>
 """
 
 
-def kicker(s):
-    return f'<p class="kicker"><span class="badge">{s["topic"]}</span><span>{html.escape(s["source"])}</span></p>'
-
-
-def lead_card(s):
+def lead_story(s):
     return (
-        f'<article class="card lead">{kicker(s)}'
-        f'<h2><a class="story-link" href="articles/{s["slug"]}.html">{html.escape(s["title"])}</a></h2>'
-        f'<p class="summary">{html.escape(sentences(s["summary"], 2))}</p>'
-        f'<p class="meta">{time_tag(s["date"])} · {s["minutes"]} min read</p></article>'
+        f'<article class="lead"><div><span class="label">{s["topic"]}</span>'
+        f'<h2><a class="story-link" href="articles/{s["slug"]}.html">{html.escape(s["title"])}</a></h2></div>'
+        f'<div class="lead-side"><p class="standfirst">{html.escape(sentences(s["summary"], 2))}</p>{dateline(s)}</div></article>'
     )
 
 
-def story_item(s):
+def grid_item(s):
     return (
-        f'<li class="story">{kicker(s)}'
+        f'<li class="item"><span class="label">{s["topic"]}</span>'
         f'<h3><a class="story-link" href="articles/{s["slug"]}.html">{html.escape(s["title"])}</a></h3>'
-        f'<p class="summary">{html.escape(sentences(s["summary"], 1))}</p>'
-        f'<p class="meta">{time_tag(s["date"])} · {s["minutes"]} min read</p></li>'
-    )
-
-
-def chart_card(series):
-    legend = "".join(f'<li style="--c:var(--c{i})">{html.escape(s["name"])}</li>' for i, s in enumerate(series["series"], 1))
-    totals = ", ".join(f'{s["name"]} {sum(s["values"])}' for s in series["series"]) or "no stories"
-    data = json.dumps(series).replace("</", "<\\/")
-    return (
-        f'<section class="card widget" aria-labelledby="chart-title"><h2 id="chart-title">Coverage by topic</h2>'
-        f'<p class="meta">Stories per day, last {CHART_DAYS} days</p>'
-        f'<div class="chart-wrap"><canvas id="coverage-chart" role="img" aria-label="Stories per topic over the last {CHART_DAYS} days: {totals}"></canvas>'
-        f'<div class="chart-tip" id="chart-tip" hidden></div></div><ul class="legend">{legend}</ul>'
-        f'<script type="application/json" id="coverage-data">{data}</script></section>'
+        f'<p>{html.escape(sentences(s["summary"], 1))}</p>{dateline(s)}</li>'
     )
 
 
 def article_page(s):
     url = s["url"]
-    button = (
-        f'<a class="button" href="{html.escape(url)}" target="_blank" rel="noopener">Read primary source &#8599;</a>'
+    source = (
+        f'<a class="source-link" href="{html.escape(url)}" target="_blank" rel="noopener">Primary source: {html.escape(s["source"])} &#8599;</a>'
         if url.startswith(("https://", "http://")) else ""
     )
     return (
-        f'<main class="article"><article>\n<nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a>'
-        f'<span aria-hidden="true">/</span><span aria-current="page">{s["topic"]}</span></nav>\n'
-        f'<header>{kicker(s)}\n<h1>{html.escape(s["title"])}</h1>\n'
-        f'<p class="meta">{time_tag(s["date"])} · {s["minutes"]} min read</p>\n{button}\n</header>\n'
+        f'<main class="article"><article>\n<p class="crumbs"><a href="../index.html">{SITE_TITLE}</a> / {s["topic"]}</p>\n'
+        f'<header><span class="label">{s["topic"]}</span>\n<h1>{html.escape(s["title"])}</h1>\n{dateline(s)}\n{source}\n</header>\n'
         f'<div class="prose">\n{s["body"]}\n</div>\n</article></main>'
     )
 
@@ -353,7 +302,6 @@ def main():
         shutil.rmtree(PUBLIC)  # generated output; a clean rebuild drops pages of deleted articles
     (PUBLIC / "articles").mkdir(parents=True)
     (PUBLIC / "style.css").write_text(CSS, encoding="utf-8")
-    shutil.copyfile(APP_JS, PUBLIC / "app.js")
 
     built = datetime.now(timezone.utc)
     quotes = market_quotes()
@@ -362,7 +310,7 @@ def main():
         meta, body = parse_article(path.read_text(encoding="utf-8"))
         title, summary, url = meta.get("title", path.stem), meta.get("summary", ""), meta.get("source_url", "")
         stories.append({
-            "slug": path.stem, "title": title, "summary": summary, "date": meta.get("date", ""), "dt": parse_date(meta.get("date", "")),
+            "slug": path.stem, "title": title, "summary": summary, "date": meta.get("date", ""),
             "url": url, "source": source_name(url), "topic": topic_of(title, summary), "minutes": read_minutes(body),
             "body": markdown(body),
         })
@@ -373,17 +321,15 @@ def main():
         (PUBLIC / "articles" / f"{s['slug']}.html").write_text(page(s["title"], article_page(s), "../", header), encoding="utf-8")
 
     if stories:
-        # the newest story leads; the home page shows 10, older articles keep their pages
+        # the newest story leads; the front page shows 10, older articles keep their pages
         lead, rest = stories[0], stories[1:10]
         content = (
-            f'<main class="wrap layout"><h1 class="sr-only">{SITE_TITLE}</h1>\n<div>'
-            f'<section aria-label="Lead story">{lead_card(lead)}</section>\n'
-            f'<section aria-labelledby="latest"><h2 class="section-title" id="latest">Latest</h2>'
-            f'<ul class="stories">' + "".join(story_item(s) for s in rest) + "</ul></section></div>\n"
-            f'<aside class="side">{chart_card(coverage_series(stories, built.date()))}</aside>\n</main>'
+            f'<main class="wrap"><h1 class="sr-only">{SITE_TITLE}</h1>\n{lead_story(lead)}\n'
+            f'<section aria-labelledby="latest"><h2 class="section-head" id="latest">Latest Reports</h2>'
+            f'<ul class="grid">' + "".join(grid_item(s) for s in rest) + "</ul></section>\n</main>"
         )
     else:
-        content = '<main class="wrap layout"><p>No stories yet.</p></main>'
+        content = '<main class="wrap"><p>No stories yet.</p></main>'
     (PUBLIC / "index.html").write_text(page(SITE_TITLE, content, "", masthead("", quotes, built)), encoding="utf-8")
     print(f"built {len(stories)} articles into {PUBLIC.relative_to(ROOT)}/ ({len(quotes)} market quotes)")
 
