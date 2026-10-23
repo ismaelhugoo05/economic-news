@@ -163,6 +163,33 @@ class FetchNewsTest(unittest.TestCase):
             fetch_news.synthesize = original
         self.assertEqual(fetch_news.MAX_NEW_STORIES, 5)
 
+    def test_run_stops_at_gemini_call_cap_even_when_every_call_fails(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        import fetch_news
+        items = "".join(f"<item><title>Fed rates story {i}</title><link>https://x.test/{i}</link>"
+                        f"<pubDate>Mon, 20 Oct 2026 {i:02d}:00:00 GMT</pubDate></item>" for i in range(12))
+        calls = []
+        saved = {name: getattr(fetch_news, name) for name in
+                 ("FEEDS", "fetch", "source_material", "write_report", "REQUEST_GAP", "ARTICLES", "SEEN")}
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                fetch_news.FEEDS = {"Test": "https://x.test/feed"}
+                fetch_news.fetch = lambda url, ua=None: f"<rss><channel>{items}</channel></rss>".encode()
+                fetch_news.source_material = lambda s: "material"
+                fetch_news.write_report = lambda key, s, material, timeout: calls.append(s["url"])  # always fails (None)
+                fetch_news.REQUEST_GAP = 0
+                fetch_news.ARTICLES, fetch_news.SEEN = Path(tmp, "articles"), Path(tmp, "seen.txt")
+                os.environ["GEMINI_API_KEY"] = "test"
+                fetch_news.main()
+            finally:
+                for name, value in saved.items():
+                    setattr(fetch_news, name, value)
+                os.environ.pop("GEMINI_API_KEY", None)
+        self.assertEqual(len(calls), fetch_news.MAX_GEMINI_CALLS)  # 12 candidates, but only 8 calls
+        self.assertEqual(fetch_news.MAX_GEMINI_CALLS, 8)
+
     def test_writer_prompt_uses_skill_rules(self):
         prompt = writer_prompt()
         self.assertIn("100% original", prompt)

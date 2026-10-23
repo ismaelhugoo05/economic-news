@@ -20,6 +20,7 @@ ARTICLES = ROOT / "content" / "articles"
 SEEN = ROOT / "data" / "seen_urls.txt"
 WRITER_SKILL = ROOT / ".claude" / "skills" / "economic-writer" / "SKILL.md"
 MAX_NEW_STORIES = 5  # per run; keeps a run well inside the Gemini free tier's daily request quota
+MAX_GEMINI_CALLS = 8  # per run, successful or not, so rejected reports and timeouts can't drain the quota
 # gemini-1.5-flash was shut down in Sept 2025 and 2.5-flash is legacy-only; check
 # ai.google.dev/gemini-api/docs/models when this one retires
 MODEL = "gemini-3.8-flash"
@@ -284,6 +285,9 @@ def main():
     with SEEN.open("a", encoding="utf-8") as seen_file:
         for s in sorted(fresh.values(), key=lambda s: s["date"], reverse=True):
             if written == MAX_NEW_STORIES:
+                break
+            if calls == MAX_GEMINI_CALLS:
+                print(f"Gemini call cap of {MAX_GEMINI_CALLS} reached; publishing what is written", file=sys.stderr)
                 break
             if deadline - time.monotonic() < MIN_TIME_FOR_REPORT:
                 print(f"run time limit of {RUN_LIMIT}s reached; publishing what is written", file=sys.stderr)
